@@ -1,0 +1,353 @@
+---
+title: Anthropic Provider
+social:
+  title: Anthropic Provider
+  tagline: Configure Claude models, prompt caching, reasoning, structured outputs, and Anthropic web tools.
+  description: Configure Claude models, prompt caching, reasoning, structured outputs, and Anthropic web tools.
+  alt: fast-agent social card — Anthropic
+---
+
+Anthropic models support Text, Vision and PDF content. Caching is enabled by default, and Remote MCP is supported.
+
+## Streaming timeout
+
+`streaming_timeout` limits HTTP read inactivity for Anthropic Messages, including
+Copilot Messages. SSE pings keep a stream alive even when no text or other parsed
+events arrive. It is not a total response deadline. Parsed-event timing is still
+recorded for diagnostics.
+
+`streaming_timeout=none` disables the read and stream-start timeouts; SDK
+connect/write/pool limits remain unchanged. A numeric value also bounds stream
+startup as before.
+
+## Claude Sonnet 5.5
+
+`sonnet`, `claude`, and `sonnet55` select `claude-sonnet-5-5`.
+`sonnet5` remains pinned to Sonnet 5.
+
+```bash
+# Uses ANTHROPIC_API_KEY (or anthropic.api_key in configuration).
+uv run fast-agent go --model sonnet55
+# Uses the existing Copilot login, not your Anthropic API key.
+uv run fast-agent go --model copilot.sonnet55
+```
+
+Sonnet 5.5 has a 1M-token context and 128K maximum output. Adaptive thinking
+defaults to `high` effort; `low`, `medium`, `high`, `xhigh`, and `max` are
+supported. fast-agent requests `thinking: {"type": "adaptive", "display": "summarized"}`
+by default on both API-key and Copilot routes, preserving adaptive thinking while
+making progress summaries visible. Explicit request metadata can override display.
+`reasoning=off` sends `thinking: {"type": "between_tools"}` rather
+than `disabled`. This mode supports only low/medium/high effort; manual thinking
+budgets and forced tool choice are rejected locally. Unsupported sampling controls
+are removed. Preserve signed thinking blocks unchanged and keep history append-only.
+
+See Anthropic's [Sonnet 5.5 migration notes](https://platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5).
+
+### Structured output: current models
+
+GPT-6 Astra/Sol/Luna, Opus 5.5, and Sonnet 5.5 use JSON-schema output by
+default on their API-key and Copilot routes. GPT-6 uses Responses `text.format`;
+Claude uses Messages `output_config.format`. Regular tools may coexist with the
+schema (`structured_tool_policy: always`). Request-level `no_tools` and `defer`
+remain available. Do not select legacy `tool_use` output mode for Claude 5.5:
+those models reject forced tool choice.
+
+Local mocked-HTTP tests cover schema payloads, tool coexistence, tool suppression,
+schema deferral, and Copilot header restrictions. Live Copilot smoke tests passed
+on September 28, 2026 for all five models, both schema-only and tool-call-to-schema
+round trips, including Sonnet 5.5 with `reasoning=off`. The accepted Sonnet wire ID
+is `claude-sonnet-5.5`. Direct API smoke tests remain blocked by missing credentials
+in the test environment.
+
+Use `structured_schema()` for structured output through the normal agent tool
+loop; `structured()` is the Pydantic-only output path and does not run that loop.
+The live tool test reads a randomly generated value from a local function tool
+and checks both tool execution and the final schema-validated value.
+
+To verify real responses with your configured credentials and Copilot account
+(this makes billable requests):
+
+```bash
+uv run pytest tests/e2e/structured/test_current_model_structured_outputs.py -q
+# Or test only the Sonnet routes:
+uv run pytest tests/e2e/structured/test_current_model_structured_outputs.py -q -k sonnet55
+```
+
+## Claude Haiku 5.5
+
+`haiku` and `haiku55` select `claude-haiku-5-5`. `haiku45` remains pinned to
+Haiku 4.5.
+
+```bash
+# Uses ANTHROPIC_API_KEY (or anthropic.api_key in configuration).
+uv run fast-agent go --model haiku55
+# Uses the existing Copilot login, not your Anthropic API key.
+uv run fast-agent go --model copilot.haiku55
+```
+
+Haiku 5.5 is the fast, low-cost model for high-volume work such as
+classification, routing, extraction, and subagents. It has a 1M-token context and
+128K maximum output. Adaptive thinking is on by default and defaults to `medium`
+effort; `low`, `medium`, `high`, `xhigh`, and `max` are supported, and
+`reasoning=off` sends `thinking: {"type": "disabled"}`. fast-agent requests
+summarized thinking display, removes unsupported sampling controls, and streams
+client tool input with `eager_input_streaming`. Unlike Opus/Sonnet 5.5, forced
+tool choice is accepted (the response then starts with the tool call, without
+thinking). Native JSON-schema structured output is supported.
+
+Pricing is tiered on prompt size: $0.10/$0.50 per million input/output tokens up
+to 100K prompt tokens, and $0.50/$2.50 above. The new tokenizer counts about 30%
+more tokens than Haiku 4.5 for the same text. On Copilot the wire ID is
+`claude-haiku-5.5`, with the same 1M context and 128K output limits.
+
+See Anthropic's [Haiku 5.5 overview](https://platform.claude.com/docs/en/models/haiku-5-5/overview)
+and [migration guide](https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide).
+
+## Claude Opus 5.5
+
+Released September 22, 2026. `opus` and `opus55` select `claude-opus-5-5`;
+`opus5` remains pinned to Opus 5. Copilot uses `copilot.claude-opus-5.5`
+(or `copilot.opus` / `copilot.opus55`).
+
+- 1,000,000-token context and 128,000-token maximum output.
+- Adaptive thinking is always on and cannot be disabled or assigned a manual
+  token budget. Default effort is `medium`; `auto` leaves effort to the provider.
+  Supported effort levels are `low`, `medium`, `high`, `xhigh`, and `max`, as
+  confirmed in the [Anthropic effort documentation](https://platform.claude.com/docs/en/build-with-claude/effort).
+  Fast-mode pricing is not assumed.
+- Forced tool use is unsupported. Use `auto` or `none`, and native JSON mode for
+  structured output on both direct Anthropic and Copilot routes. Legacy forced-tool
+  output mode is rejected. Unsupported sampling controls
+  are removed, as for Fable 5.1.
+- Thinking blocks belong to their originating model and conversation. Do not
+  transplant them into other conversations or models, or edit earlier history.
+  Preserve empty signed thinking blocks and text between tool calls. Thinking
+  display is omitted by the provider by default; fast-agent explicitly requests
+  `thinking: {"type": "adaptive", "display": "summarized"}` on API-key and Copilot
+  routes so progress is visible while adaptive thinking remains on.
+- Anthropic pricing per million tokens: input **$4**, output **$20**, 5-minute
+  cache writes **$5**, 1-hour cache writes **$8**, cache reads **$0.20**.
+  Cache reads are **5%** of input price, not 10%. These are not Copilot charges.
+
+## Claude Fable 5.1
+
+Use `claude-fable-5-1` (for example, `fast-agent go --model "claude-fable-5-1?reasoning=max"`).
+Existing `fable` and `fable5` aliases still select Fable 5.
+
+- 1M-token context; up to 128K output tokens, including thinking.
+- Adaptive thinking is always on. `auto` leaves effort at the API default (`high`);
+  supported levels are `low`, `medium`, `high`, `xhigh`, and `max`. Thinking cannot
+  be disabled or configured with a manual token budget.
+- Sampling controls (`temperature`, `top_p`, `top_k`) are removed before sending.
+- Tool choice supports `auto` and `none`, not forced/required tools. Use native
+  JSON structured output rather than `tool_use` mode; unsupported forcing fails locally.
+- Preserve thinking blocks unchanged, including empty signed blocks, and keep
+  history append-only. Editing earlier turns invalidates thinking; earlier models
+  cannot read Fable 5.1 thinking blocks. Assistant prefill is unsupported.
+- Requires 30-day data retention unless Anthropic expressly authorizes otherwise.
+  Input/output pricing is $10/$50 per million tokens; cache reads are $0.25/MTok.
+
+Per-message effort, turn-scoped system messages, and progress-update betas are
+not enabled automatically by this integration.
+
+See the official [overview](https://platform.claude.com/docs/en/models/fable-5-1/overview),
+[migration guide](https://platform.claude.com/docs/en/models/fable-5-1/migration-guide),
+and [thinking constraints](https://platform.claude.com/docs/en/build-with-claude/thinking).
+
+**YAML Configuration:**
+
+```yaml
+anthropic:
+  api_key: "your_anthropic_key" # Optional if ANTHROPIC_API_KEY or Anthropic SDK credentials are available
+  base_url: "https://api.anthropic.com/v1" # Default, only include if required
+  cache_mode: "auto" # Options: off, prompt, auto (default: auto)
+  cache_ttl: "5m" # Options: 5m, 1h (default: 5m)
+  cache_diagnostics: false # First-party Anthropic cache-miss diagnosis (debug only)
+  web_search:
+    enabled: false
+    # max_uses: 3
+    # allowed_domains: ["example.com", "*.docs.example.com"]
+    # blocked_domains: ["social.example"]  # mutually exclusive with allowed_domains
+    # user_location:
+    #   type: approximate
+    #   city: "London"
+    #   country: "UK"
+  web_fetch:
+    enabled: false
+    citations_enabled: false
+    # max_uses: 3
+    # max_content_tokens: 4096
+    # allowed_domains: ["example.com"]
+    # blocked_domains: ["tracking.example"]  # mutually exclusive with allowed_domains
+```
+
+**Environment Variables:**
+
+- `ANTHROPIC_API_KEY`: Your Anthropic API key
+- `ANTHROPIC_AUTH_TOKEN`: Bearer token auth supported by the Anthropic SDK
+- `ANTHROPIC_PROFILE` / `ANTHROPIC_CONFIG_DIR`: Select Anthropic SDK profile credentials
+- `ANTHROPIC_BASE_URL`: Override the API endpoint
+
+**Authentication precedence:**
+
+**fast-agent** first uses an explicit `anthropic.api_key`, then `ANTHROPIC_API_KEY`. If neither is
+set, it constructs the Anthropic SDK client without an API key so the SDK can use its own credential
+chain, including `ANTHROPIC_AUTH_TOKEN`, profile credentials, and workload identity federation
+environment variables. `fast-agent check` reports these as Anthropic SDK credentials when the SDK
+finds an auth source.
+
+**Caching Options:**
+
+The `cache_mode` setting controls how prompt caching is applied:
+
+- `off`: No caching, even if global `prompt_caching` is enabled
+- `prompt`: Caches tools, system prompt, and template content
+- `auto`: Also advances cache checkpoints through recent conversation turns (default)
+
+The `cache_ttl` setting controls how long cached content persists:
+
+- `5m`: Standard 5-minute cache (default)
+- `1h`: Extended 1-hour cache (additional cost)
+
+The TTL is a user policy choice. A 5-minute cache has a lower write premium and
+usually pays off after one future read. A 1-hour cache survives longer gaps but
+has a higher write premium and generally needs two future reads to pay off.
+For long-running managed processes, pair the extended cache with a model-local
+wait such as `opus?poll_period=3000`; the wait returns early if the process
+finishes and leaves margin before the one-hour cache expires.
+Anthropic silently skips cache writes when the marked prefix is below the
+model's minimum cacheable size; check the cache creation/read usage fields
+before treating an early request as a cache miss.
+
+Set `cache_diagnostics: true` only while debugging against the first-party
+Anthropic API. It enables Anthropic's cache-diagnosis beta and records the
+provider's cache-miss reason in the `fast-agent-provider-diagnostics` response
+channel. It is disabled by default and is not sent by Anthropic-on-Vertex.
+
+**Reasoning + Structured Outputs:**
+
+Claude reasoning support depends on the model family:
+
+| Model family | fast-agent aliases | Reasoning mode | Effort values | Task budget |
+| --- | --- | --- | --- | --- |
+| Claude Opus 5.5 | `opus`, `opus55` | adaptive, always on | `auto`, `low`, `medium`, `high`, `xhigh`, `max` | not enabled |
+| Claude Opus 5 | `opus5` | adaptive, on by default | `auto`, `low`, `medium`, `high`, `xhigh`, `max`, `off` | supported |
+| Claude Opus 4.8 | `opus4`, `opus48` | adaptive | `auto`, `low`, `medium`, `high`, `xhigh`, `max`, `off` | supported |
+| Claude Opus 4.7 | `opus47` | adaptive | `auto`, `low`, `medium`, `high`, `xhigh`, `max`, `off` | supported |
+| Claude Opus 4.6 | `opus46` | adaptive | `auto`, `low`, `medium`, `high`, `max`, `off` | not supported |
+| Claude Sonnet 5 | `sonnet`, `sonnet5` | adaptive | `auto`, `low`, `medium`, `high`, `xhigh`, `max`, `off` | not supported |
+| Claude Sonnet 4.6 | `sonnet46` | adaptive | `auto`, `low`, `medium`, `high`, `max`, `off` | not supported |
+| Older Claude 4.x / Haiku | `haiku`, pinned older IDs | token budget | `1024+` token budgets, or preset aliases | not supported |
+
+Adaptive models that require an explicit setting use `thinking: {"type": "adaptive"}` under the
+hood. Opus 5 has adaptive thinking on by default, so **fast-agent** omits the field for `auto`.
+Use effort levels (`low`, `medium`, `high`, `xhigh` where supported, `max`) or `auto` with
+`anthropic.reasoning`:
+
+```yaml
+anthropic:
+  reasoning: "high"
+```
+
+Adaptive models default to `auto` (provider-chosen). Do not configure fixed thinking budgets for
+these models; use effort levels instead.
+
+`task_budget` is available for Claude Opus 4.7+ in **fast-agent**. It gives the model a visible token
+budget for a full agentic loop, so the model can self-moderate. It is different from `max_tokens`,
+which is still the enforced ceiling for one response:
+
+```yaml
+anthropic:
+  reasoning: "xhigh"
+  task_budget: 128k
+```
+
+Anthropic models using budget-based thinking default to **reasoning on** with a **1024 token budget**.
+Use `anthropic.reasoning` to set a budget, map from effort aliases, or disable reasoning entirely:
+
+```yaml
+anthropic:
+  reasoning: 16000 # Reasoning budget tokens (minimum: 1024)
+```
+
+- Disable reasoning with `reasoning: "0"`, `reasoning: "off"`, or `reasoning: false`.
+- Budget models also accept `low`/`medium`/`high`/`max` to map to preset budgets.
+- The reasoning budget must be less than `max_tokens`. If you set a budget that meets/exceeds
+  `max_tokens`, **fast-agent** raises `max_tokens` so the budget fits.
+
+You can also set reasoning per run using the model string:
+
+- `sonnet?reasoning=4096`
+- `opus5?reasoning=xhigh&task_budget=128k`
+- `opus47?reasoning=auto&task_budget=64k`
+- `claude-opus-4-6?reasoning=auto`
+
+**Structured output selection (Anthropic JSON schema vs tool_use):**
+
+- Models that support the `structured-outputs-2025-11-13` feature default to JSON schema output
+  (`structured_output_mode: json`). This mode **is compatible with reasoning**.
+- Older models default to the legacy `tool_use` structured output flow. `tool_use` **is not compatible
+  with reasoning** — **fast-agent** disables reasoning when tool-forced structured output is selected.
+- Anthropic on Vertex does not support modern structured outputs in **fast-agent**; choose
+  `structured_output_mode: tool_use` / `?structured=tool_use` there.
+
+You can override the structured output mode explicitly:
+
+```yaml
+anthropic:
+  structured_output_mode: auto # auto (default), json, or tool_use
+```
+
+Deprecated: `thinking_enabled` and `thinking_budget_tokens` are ignored. Use `reasoning`.
+
+**Built-in Anthropic web tools (`web_search` + `web_fetch`):**
+
+**fast-agent** can enable Anthropic server-side web tools directly (these are not MCP tool calls):
+
+- `anthropic.web_search.enabled: true`
+- `anthropic.web_fetch.enabled: true`
+
+Optional controls:
+
+- `max_uses`
+- `allowed_domains` / `blocked_domains` (mutually exclusive)
+- `web_search.user_location` (approximate city/region/country/timezone)
+- `web_fetch.max_content_tokens`
+- `web_fetch.citations_enabled`
+
+You can override per run in the model string:
+
+- `claude-opus-4-6?web_search=on&web_fetch=on`
+- `sonnet?web_search=off`
+
+Supported values are `on`/`off` (also accepts `true`/`false`, `1`/`0`).
+
+Version policy is model-aware:
+
+- Claude Opus 5 supports `web_search_20260209` but does not support `web_fetch`.
+- Claude 4.6 models use `web_search_20260209` and `web_fetch_20260209`
+  (with required beta header `code-execution-web-tools-2026-02-09`).
+- Other supported Anthropic models use legacy versions
+  (`web_search_20250305`, `web_fetch_20250910`).
+
+**Provider-managed remote MCP:**
+
+The direct `anthropic` provider supports provider-managed remote MCP servers
+declared with `management: provider` under `mcp.servers` or card `mcp_connect`
+entries.
+
+- Supported on `anthropic`
+- Not supported on `anthropic-vertex`
+- Server must be a remote `http`/`sse` URL
+- Use `access_token` for bearer auth if required
+
+See [Configuration Reference](../../ref/config_file/#mcp-server-configuration)
+for the MCP server schema and
+[Agent Cards](../../agents/defining/agent_cards.md#configure-mcp-servers-and-filters)
+for card-scoped runtime targets.
+
+
+**Model Name Aliases:**
+
+--8<-- "_generated/model_aliases_anthropic.md"

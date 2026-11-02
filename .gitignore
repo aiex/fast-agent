@@ -155,13 +155,15 @@ dmypy.json
 cython_debug/
 
 # Make sure secrets files aren't added
+*.secrets.yaml
 examples/**/*.secrets.yaml
 
 # but make sure example files are
+!*.secrets.yaml.example
 !examples/**/*.secrets.yaml.example
 
 # Build-generated resources (copied from examples/ during build)
-src/mcp_agent/resources/examples/
+src/fast_agent/resources/
 
 # Test data files
 examples/mcp_root_test/test_data/*.png
@@ -178,12 +180,12 @@ uv.lock
 project_contents.md
 
 # example logs
-examples/**/*.jsonl
-mcp_agent.config.yaml
-mcp_agent.secrets.yaml
+*.jsonl
+!tests/fixtures/llm_traces/sanitized/**/*.jsonl
 fastagent.secrets.yaml
 CLAUDE.md
 example-outputs/
+stream-debug/
 
 tests/integration/api/weather_location.txt
 tests/integration/prompt-state/simple.txt
@@ -191,14 +193,45 @@ tests/integration/workflow/router/fastagent.jsonl
 tests/e2e/smoke/weather_location.txt
 tests/integration/resources/fastagent.jsonl
 tests/integration/workflow/orchestrator/fastagent.jsonl
-fastagent.jsonl
+/fastagent.jsonl
 tests/integration/resources/fastagent.jsonl
-fastagent.jsonl
+/fastagent.jsonl
 tests/e2e/workflow/weather_location.txt
 tests/integration/prompt-state/multipart.json
 tests/integration/prompt-state/history.json
 !tests/integration/api/fastagent.secrets.yaml
-fastagent.jsonl
+/fastagent.jsonl
 
 tests/e2e/smoke/base/weather_location.txt
 tests/integration/roots/fastagent.jsonl
+
+
+# Runtime session data
+sessions/
+hf-dev/sessions/
+
+# Auth configuration (local/secrets)
+auths.md
+
+# Local development repos / directories
+.dev
+upskill
+.demo
+.fast-agent
+!examples/a2a/research/.fast-agent/
+!examples/a2a/research/.fast-agent/agent-cards/
+!examples/a2a/research/.fast-agent/agent-cards/*.md
+!examples/environments/.fast-agent/
+examples/environments/.fast-agent/*
+!examples/environments/.fast-agent/fast-agent.yaml
+
+/fastagent.config.yaml
+
+# Experimental MCP sessions demo runtime artifacts
+examples/experimental/mcp_sessions/demo/sessions/
+examples/experimental/mcp_sessions/demo/mcp-cookie.json
+.cdx/
+.fast-agent-old/
+
+# Local social card design previews (absolute file:// paths)
+docs/social_cards/previews/

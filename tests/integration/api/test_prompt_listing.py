@@ -4,7 +4,7 @@ Test the prompt listing and selection functionality directly.
 
 import pytest
 
-from mcp_agent.core.interactive_prompt import InteractivePrompt
+from fast_agent.ui.interactive_prompt import InteractivePrompt
 
 
 @pytest.mark.integration
@@ -64,7 +64,7 @@ async def test_apply_prompt_with_namespaced_name(fast_agent):
             prompt_name = prompts["prompts"][0].name
 
             # Create properly namespaced name using the same separator as mcp_aggregator
-            from mcp_agent.mcp.mcp_aggregator import SEP
+            from fast_agent.mcp.mcp_aggregator import SEP
 
             namespaced_name = f"prompts{SEP}{prompt_name}"
 
@@ -73,6 +73,6 @@ async def test_apply_prompt_with_namespaced_name(fast_agent):
 
             # Verify the prompt was applied
             assert response, "No response from apply_prompt"
-            assert len(agent.test._llm.message_history) > 0
+            assert len(agent.test.message_history) > 0
 
     await agent_function()

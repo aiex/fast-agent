@@ -1,16 +1,15 @@
-# integration_tests/mcp_agent/test_agent_with_image.py
 import os
 from enum import Enum
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 import pytest
 from pydantic import BaseModel, Field
 
-from mcp_agent.core.prompt import Prompt
+from fast_agent.mcp.prompt import Prompt
 
 if TYPE_CHECKING:
-    from mcp_agent.llm.memory import Memory
-    from mcp_agent.mcp.prompt_message_multipart import PromptMessageMultipart
+    from fast_agent.llm.memory import Memory
+    from fast_agent.mcp.prompt_message_extended import PromptMessageExtended
 
 
 @pytest.mark.integration
@@ -21,24 +20,24 @@ if TYPE_CHECKING:
     [
         "gpt-4.1-mini",
         "gpt-4o-mini",  # OpenAI model
-        "o3-mini.low",  # reasoner
-        "haiku35",  # Anthropic model
+        "o3-mini?reasoning=low",  # reasoner
+        "haiku",  # Anthropic model
         "deepseek",
         "generic.qwen2.5:latest",
         "generic.llama3.2:latest",
         "openrouter.google/gemini-2.0-flash-001",
-        "googleoai.gemini-2.5-flash-preview-05-20",
+        "googleoai.gemini-2.5-flash",
         "google.gemini-2.0-flash",
         "gemini2",
         "gemini25",  # Works -> Done. Works most of the time, unless Gemini decides to write very long outputs.
         "azure.gpt-4.1",
-        "grok-3-fast",
+        "grok-4.3",
         "groq.moonshotai/kimi-k2-instruct",
-        # "groq.deepseek-r1-distill-llama-70b", # handle reasoning outputs (they are long)
+        "gpt-5-mini?reasoning=minimal",
     ],
 )
 async def test_basic_textual_prompting(fast_agent, model_name):
-    """Test that the agent can process an image and respond appropriately."""
+    """Test basic textual prompting."""
     fast = fast_agent
 
     # Define the agent
@@ -63,7 +62,7 @@ async def test_basic_textual_prompting(fast_agent, model_name):
 @pytest.mark.e2e
 @pytest.mark.parametrize(
     "model_name",
-    ["gpt-4.1-nano", "generic.qwen2.5:latest", "haiku", "grok-3-fast"],
+    ["gpt-4.1-nano", "generic.qwen2.5:latest", "haiku", "grok-4.3"],
 )
 async def test_open_ai_history(fast_agent, model_name):
     """Test that the agent can process an image and respond appropriately."""
@@ -96,13 +95,15 @@ async def test_open_ai_history(fast_agent, model_name):
     "model_name",
     [
         "gpt-4o-mini",  # OpenAI model
-        "haiku35",  # Anthropic model
+        "haiku",  # Anthropic model
+        "sonnet",  # Anthropic model
         "deepseek",
         "openrouter.google/gemini-2.0-flash-001",
         "gemini2",
         "gemini25",  # Works -> DONE.
-        "o3-mini.low",
+        "o3-mini?reasoning=low",
         "groq.moonshotai/kimi-k2-instruct",
+        "gpt-5-mini?reasoning=minimal",
     ],
 )
 async def test_multiple_text_blocks_prompting(fast_agent, model_name):
@@ -115,7 +116,7 @@ async def test_multiple_text_blocks_prompting(fast_agent, model_name):
     )
     async def agent_function():
         async with fast.run() as agent:
-            response: PromptMessageMultipart = await agent.default.generate(
+            response: PromptMessageExtended = await agent.default.generate(
                 [Prompt.user("write a 60 word story", "about cats - including the word 'cat'")]
             )
             response_text = response.all_text()
@@ -124,7 +125,7 @@ async def test_multiple_text_blocks_prompting(fast_agent, model_name):
             assert 32 <= word_count <= 70, f"Expected between 32-70 words, got {word_count}"
             assert "cat" in response_text
 
-            response: PromptMessageMultipart = await agent.default.generate(
+            response: PromptMessageExtended = await agent.default.generate(
                 [
                     Prompt.user("write a 60 word story"),
                     Prompt.user("about cats - including the word 'cat'"),
@@ -174,7 +175,7 @@ class WeatherForecast(BaseModel):
 
     location: str = Field(..., description="City and country")
     unit: TemperatureUnit = Field(..., description="Temperature unit")
-    forecast: List[DailyForecast] = Field(..., description="Daily forecasts")
+    forecast: list[DailyForecast] = Field(..., description="Daily forecasts")
     summary: str = Field(..., description="Brief summary of the overall forecast")
 
 
@@ -185,13 +186,14 @@ class WeatherForecast(BaseModel):
     "model_name",
     [
         "gpt-4o",  # OpenAI model
-        "o3-mini.low",  # reasoning
+        "o3-mini?reasoning=low",  # reasoning
         "gpt-4.1-nano",
         "gpt-4.1-mini",
         "gemini2",
         "gemini25",  # Works -> DONE.
         "azure.gpt-4.1",
-        "grok-3",
+        "grok-4.3",
+        "gpt-5-mini?reasoning=minimal",
         #  "grok-4", slow,
     ],
 )
@@ -301,7 +303,7 @@ async def test_generic_model_textual_prompting(fast_agent, model_name):
     "model_name",
     [
         "deepseek",
-        "haiku35",
+        "haiku",
         "gpt-4o",
         "gpt-4.1-nano",
         "gpt-4.1-mini",
@@ -311,13 +313,14 @@ async def test_generic_model_textual_prompting(fast_agent, model_name):
         "gemini25",
         "generic.qwen2.5:latest",
         "generic.llama3.2:latest",
-        "o3-mini.low",
-        "o4-mini.low",
+        "o3-mini?reasoning=low",
+        "o4-mini?reasoning=low",
         "azure.gpt-4.1",
-        "grok-3",
+        "grok-4.3",
         "groq.moonshotai/kimi-k2-instruct",
-        "groq.deepseek-r1-distill-llama-70b",
         "groq.qwen/qwen3-32b",
+        "gpt-oss",
+        "gpt-5-mini?reasoning=minimal",
     ],
 )
 async def test_basic_tool_calling(fast_agent, model_name):
@@ -359,7 +362,7 @@ async def test_basic_tool_calling(fast_agent, model_name):
     "model_name",
     [
         "deepseek",
-        "haiku35",
+        "haiku",
         "gpt-4o",
         "gpt-4.1-mini",
         "gemini2",
@@ -367,8 +370,9 @@ async def test_basic_tool_calling(fast_agent, model_name):
         "openrouter.anthropic/claude-3.7-sonnet",
         "openrouter.google/gemini-2.5-flash",
         "azure.gpt-4.1",
-        "grok-3",
+        "grok-4.3",
         "groq.moonshotai/kimi-k2-instruct",
+        "gpt-5-nano?reasoning=minimal",
     ],
 )
 async def test_tool_calls_no_args(fast_agent, model_name):
@@ -395,7 +399,7 @@ async def test_tool_calls_no_args(fast_agent, model_name):
     "model_name",
     [
         "deepseek",
-        "haiku35",
+        "haiku",
         #       "gpt-4o",
         #      "gpt-4.1",
         #     "gpt-4.1-nano",
@@ -433,7 +437,7 @@ async def test_tool_calls_no_args_typescript(fast_agent, model_name):
     "model_name",
     [
         "deepseek",
-        "haiku35",
+        "haiku",
         "gpt-4.1",
         "google.gemini-2.0-flash",
         "gemini25",  # Works -> DONE.

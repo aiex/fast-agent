@@ -1,32 +1,23 @@
-import importlib
 import os
 import subprocess
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
-from mcp_agent.core.fastagent import FastAgent
+from fast_agent import FastAgent
+from fast_agent.core.logging.logger import LoggingConfig
+from fast_agent.core.logging.transport import AsyncEventBus
 
 
-# Keep the auto-cleanup fixture
-@pytest.fixture(scope="function", autouse=True)
-def cleanup_event_bus():
-    """Reset the AsyncEventBus between tests using its reset method"""
-    # Run the test
+@pytest_asyncio.fixture(autouse=True)
+async def cleanup_event_bus() -> AsyncIterator[None]:
+    """Gracefully stop loop-owned logging tasks between end-to-end tests."""
     yield
-
-    # Reset the AsyncEventBus after each test
-    try:
-        # Import the module with the AsyncEventBus
-        transport_module = importlib.import_module("mcp_agent.logging.transport")
-        AsyncEventBus = getattr(transport_module, "AsyncEventBus", None)
-
-        # Call the reset method if available
-        if AsyncEventBus and hasattr(AsyncEventBus, "reset"):
-            AsyncEventBus.reset()
-    except Exception:
-        pass
+    await LoggingConfig.shutdown()
+    AsyncEventBus.reset()
 
 
 # Set the project root directory for tests
@@ -94,14 +85,14 @@ def tensorzero_docker_env(project_root):
     """Ensures the TensorZero docker-compose environment is running."""
     compose_file = project_root / "examples" / "tensorzero" / "docker-compose.yml"
     compose_dir = compose_file.parent
-    compose_cmd = ["docker-compose", "-f", str(compose_file)]
+    compose_cmd = ["docker", "compose", "-f", str(compose_file)]
 
     print(f"\nEnsuring TensorZero Docker environment is up ({compose_file})...")
     try:
         # Use --wait flag if available, otherwise fallback to time.sleep
         check_wait_support_cmd = compose_cmd + ["up", "--help"]
         help_output = subprocess.run(
-            check_wait_support_cmd, capture_output=True, text=True, cwd=compose_dir
+            check_wait_support_cmd, check=False, capture_output=True, text=True, cwd=compose_dir
         )
         use_wait_flag = "--wait" in help_output.stdout or "--wait" in help_output.stderr
 

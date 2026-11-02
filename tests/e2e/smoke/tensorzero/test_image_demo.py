@@ -1,11 +1,11 @@
-import asyncio
 import importlib.util
+import inspect
 import sys
 from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.usefixtures("tensorzero_docker_env")
+pytestmark = pytest.mark.usefixtures("tensorzero_docker_env", "chdir_to_tensorzero_example")
 
 
 def import_from_path(module_name: str, file_path: Path):
@@ -18,8 +18,9 @@ def import_from_path(module_name: str, file_path: Path):
     return module
 
 
+@pytest.mark.e2e
 @pytest.mark.asyncio
-async def test_tensorzero_image_demo_smoke(project_root, chdir_to_tensorzero_example):
+async def test_tensorzero_image_demo_smoke(project_root):
     """
     Smoke test for the TensorZero image demo script.
     Ensures the script runs to completion without errors.
@@ -34,10 +35,11 @@ async def test_tensorzero_image_demo_smoke(project_root, chdir_to_tensorzero_exa
     try:
         image_demo_module = import_from_path("image_demo_module", image_demo_script_path)
         main_func = getattr(image_demo_module, "main", None)
-        if not main_func or not asyncio.iscoroutinefunction(main_func):
+        if not main_func or not inspect.iscoroutinefunction(main_func):
             pytest.fail(f"'main' async function not found in {image_demo_script_path}")
 
         print("Executing image_demo.main()...")
+        assert main_func is not None  # Type narrowing after pytest.fail
         await main_func()
         print("image_demo.main() executed successfully.")
 

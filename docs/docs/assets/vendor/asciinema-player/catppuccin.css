@@ -1,0 +1,81 @@
+/* fast-agent terminal palettes for asciinema-player.
+   Custom light/dark palettes instead of the stock asciinema themes; the demo
+   frame and theme switch below use the brand tokens from stylesheets/brand.css. */
+.asciinema-player-theme-fast-agent-light {
+  --term-color-foreground: #1c1a16;
+  --term-color-background: #f6f3eb;
+  --term-color-0: #4a463d;
+  --term-color-1: #b84a3c;
+  --term-color-2: #1f7d50;
+  --term-color-3: #b67500;
+  --term-color-4: #2c63b0;
+  --term-color-5: #8a5fbf;
+  --term-color-6: #179299;
+  --term-color-7: #4a463d;
+  --term-color-8: #756e5e;
+  --term-color-9: #b84a3c;
+  --term-color-10: #1f7d50;
+  --term-color-11: #d28a00;
+  --term-color-12: #2c63b0;
+  --term-color-13: #8a5fbf;
+  --term-color-14: #179299;
+  --term-color-15: #1c1a16;
+}
+
+.asciinema-player-theme-fast-agent-dark {
+  --term-color-foreground: #f0ece2;
+  --term-color-background: #0b0c0f;
+  --term-color-0: #14161b;
+  --term-color-1: #f06b5a;
+  --term-color-2: #6ad19c;
+  --term-color-3: #f5a400;
+  --term-color-4: #6aa3f7;
+  --term-color-5: #c586f7;
+  --term-color-6: #6ad1c8;
+  --term-color-7: #b9b3a5;
+  --term-color-8: #7d786d;
+  --term-color-9: #f06b5a;
+  --term-color-10: #6ad19c;
+  --term-color-11: #ffc649;
+  --term-color-12: #6aa3f7;
+  --term-color-13: #d5a6ff;
+  --term-color-14: #8be9df;
+  --term-color-15: #f0ece2;
+}
+
+.fa-terminal-demo .ap-wrapper {
+  border: 2px solid var(--fa-keyline);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.fa-terminal-theme-switch {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0.35rem;
+}
+
+.fa-terminal-theme-switch button {
+  border: 2px solid var(--fa-keyline);
+  border-radius: 6px;
+  background: var(--fa-raised);
+  color: var(--fa-ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  padding: 0.18rem 0.55rem;
+  text-transform: uppercase;
+}
+
+.fa-terminal-theme-switch button:hover {
+  color: var(--fa-ink);
+}
+
+.fa-terminal-theme-switch button[aria-pressed] {
+  border-color: var(--fa-accent);
+  background: var(--fa-accent-wash);
+  color: var(--fa-accent);
+  box-shadow: inset 0 -1px 0 var(--amber);
+}

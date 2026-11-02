@@ -63,8 +63,9 @@ services:
 
   mcp-server:
     build:
-      context: ../..
-      dockerfile: examples/tensorzero/mcp_server/Dockerfile
+      context: ./mcp_server
+      dockerfile: Dockerfile
+    working_dir: /app
     volumes:
       - ./mcp_server:/app
     ports:
@@ -76,10 +77,9 @@ services:
       test:
         [
           "CMD",
-          "wget",
-          "--spider",
-          "--tries=1",
-          "http://localhost:8000/t0-example-server/sse",
+          "python",
+          "-c",
+          "import socket; socket.create_connection(('127.0.0.1', 8000), 2).close()",
         ]
       interval: 10s
       timeout: 5s

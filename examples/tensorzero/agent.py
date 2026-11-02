@@ -1,10 +1,10 @@
 import asyncio
 
-from mcp_agent.core.fastagent import FastAgent
-from mcp_agent.core.request_params import RequestParams
+from fast_agent import FastAgent
+from fast_agent.llm.request_params import RequestParams
 
 # Explicitly provide the path to the config file in the current directory
-CONFIG_FILE = "fastagent.config.yaml"
+CONFIG_FILE = "fast-agent.yaml"
 fast = FastAgent("fast-agent example", config_path=CONFIG_FILE, ignore_unknown_args=True)
 
 # Define T0 system variables here
@@ -32,4 +32,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())  # type: ignore
+    asyncio.run(main())

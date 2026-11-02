@@ -1,6 +1,6 @@
 import asyncio
 
-from mcp_agent.core.fastagent import FastAgent
+from fast_agent import FastAgent
 
 # Create the application
 fast = FastAgent("Agent Chaining")
@@ -21,6 +21,7 @@ fast = FastAgent("Agent Chaining")
 @fast.chain(
     name="post_writer",
     sequence=["url_fetcher", "social_media"],
+    default=True,
 )
 async def main() -> None:
     async with fast.run() as agent:

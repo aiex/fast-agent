@@ -1,0 +1,52 @@
+# Social card themes. Precedence: default < sections < pages < page frontmatter `social:`.
+#
+# design:  hero | sparkles | burst | presenter | terminal
+# scheme:  ivory | petrol
+# badge:   small uppercase section label in the header
+# burst:   word shouted inside the burst (burst design; defaults to badge)
+# pose:    board | palm (presenter design; board shows an illustrative chart)
+
+default:
+  design: sparkles
+  scheme: ivory
+  badge: "DOCS"
+
+sections:
+  a2a:
+    badge: "A2A"
+    design: burst
+  acp:
+    badge: "ACP"
+    design: burst
+  agents:
+    badge: "AGENTS"
+  benchmarks:
+    badge: "BENCHMARKS"
+    design: presenter
+    pose: board
+  getting_started:
+    badge: "START"
+    design: terminal
+  guides:
+    badge: "GUIDE"
+    design: terminal
+  mcp:
+    badge: "MCP"
+    design: burst
+  models:
+    badge: "MODELS"
+    design: presenter
+    pose: palm
+  ref:
+    badge: "REFERENCE"
+    scheme: petrol
+  welcome:
+    badge: "WELCOME"
+
+pages:
+  index.md:
+    design: hero
+    tagline: "The harness your model deserves."
+  getting_started.md:
+    badge: "START"
+    design: terminal

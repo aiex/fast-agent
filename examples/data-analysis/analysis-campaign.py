@@ -1,7 +1,7 @@
 import asyncio
 
-from mcp_agent.core.fastagent import FastAgent
-from mcp_agent.llm.augmented_llm import RequestParams
+from fast_agent import FastAgent
+from fast_agent.llm.fastagent_llm import RequestParams
 
 # Create the application
 fast = FastAgent("Data Analysis & Campaign Generator")
@@ -19,7 +19,7 @@ Visualisations should be saved as .png files in the current working directory.
 Extract key insights that would be compelling for a social media campaign.
 """,
     servers=["interpreter"],
-    request_params=RequestParams(maxTokens=8192),
+    request_params=RequestParams(max_tokens=8192),
     model="sonnet",
 )
 @fast.agent(
@@ -32,7 +32,7 @@ Extract key insights that would be compelling for a social media campaign.
      - Has had its findings challenged, and justified
      - Extracted compelling insights suitable for social media promotion
     """,
-    request_params=RequestParams(maxTokens=8192),
+    request_params=RequestParams(max_tokens=8192),
     model="gpt-4.1",
 )
 @fast.evaluator_optimizer(
@@ -169,7 +169,7 @@ Extract key insights that would be compelling for a social media campaign.
         "translate_campaign",
     ],
     model="sonnet",  # Using a more capable model for orchestration
-    request_params=RequestParams(maxTokens=8192),
+    request_params=RequestParams(max_tokens=8192),
     plan_type="full",
 )
 async def main() -> None:
@@ -179,8 +179,9 @@ async def main() -> None:
     )
 
     async with fast.run() as agent:
-        await agent.research_campaign_creator.prompt(
-            default_prompt="Analyze the CSV file in the current directory and create a comprehensive multi-lingual social media campaign based on the findings. Save all campaign elements as separate files."
+        await agent.interactive(
+            "research_campaign_creator",
+            default_prompt="Analyze the CSV file in the current directory and create a comprehensive multi-lingual social media campaign based on the findings. Save all campaign elements as separate files.",
         )
 
 

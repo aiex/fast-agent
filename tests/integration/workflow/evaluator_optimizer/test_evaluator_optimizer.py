@@ -3,11 +3,11 @@ import json
 import pytest
 from pydantic import BaseModel, Field
 
-from mcp_agent.agents.workflow.evaluator_optimizer import (
+from fast_agent.agents.workflow.evaluator_optimizer import (
     QualityRating,
 )
-from mcp_agent.core.prompt import Prompt
-from mcp_agent.llm.augmented_llm_passthrough import FIXED_RESPONSE_INDICATOR
+from fast_agent.llm.internal.passthrough import FIXED_RESPONSE_INDICATOR
+from fast_agent.mcp.prompt import Prompt
 
 
 class EvaluationResult(BaseModel):
@@ -159,9 +159,10 @@ async def test_max_refinements_limit(fast_agent):
             # Should get the second refinement as the final output (due to max_refinements=2)
             assert "refinement" in result
 
-            # Check that the refinement history contains at most 2 attempts
+            # The optimizer may evaluate the final refined response after using
+            # the full refinement budget.
             history = agent.optimizer_max.refinement_history
-            assert len(history) <= 2
+            assert len(history) <= 3
 
     await agent_function()
 

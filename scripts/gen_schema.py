@@ -15,7 +15,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import typer
 from pydantic import BaseModel
@@ -26,7 +26,7 @@ app = typer.Typer()
 console = Console()
 
 
-def extract_model_info(content: str) -> Dict[str, Dict[str, str]]:
+def extract_model_info(content: str) -> dict[str, dict[str, str]]:
     """
     Extract docstrings for all models and their fields.
     Returns a dict mapping model names to their field descriptions.
@@ -120,8 +120,8 @@ def create_mock_modules() -> None:
         "opentelemetry.sdk.resources",
         "opentelemetry.exporter.otlp.proto.http",
         "opentelemetry.trace",
-        "mcp_agent.logging",
-        "mcp_agent.logging.logger",
+        "fast_agent.core.logging",
+        "fast_agent.core.logging.logger",
         "yaml",
     ]
 
@@ -132,7 +132,7 @@ def create_mock_modules() -> None:
 
 def load_settings_class(
     file_path: Path,
-) -> Tuple[type[BaseSettings], Dict[str, Dict[str, str]]]:
+) -> tuple[type[BaseSettings], dict[str, dict[str, str]]]:
     """Load Settings class from a Python file."""
     # Add src directory to Python path
     src_dir = file_path.parent.parent.parent / "src"
@@ -164,7 +164,7 @@ def load_settings_class(
 
 
 def apply_descriptions_to_schema(
-    schema: Dict[str, Any], model_info: Dict[str, Dict[str, str]]
+    schema: dict[str, Any], model_info: dict[str, dict[str, str]]
 ) -> None:
     """Recursively apply descriptions to schema and all its nested models."""
     if not isinstance(schema, dict):
@@ -195,7 +195,7 @@ def apply_descriptions_to_schema(
 @app.command()
 def generate(
     config_py: Path = typer.Option(
-        Path("src/mcp_agent/config.py"),
+        Path("src/fast_agent/config.py"),
         "--config",
         "-c",
         help="Path to the config.py file",
@@ -245,31 +245,9 @@ def generate(
 
         console.print(f"[green]✓[/] Schema written to: {output}")
 
-        # Get path relative to cwd for VS Code settings
-        try:
-            rel_path = f"./{output.relative_to(Path.cwd())}"
-        except ValueError:
-            # If can't make relative, use absolute path
-            rel_path = str(output)
-
-        # Print VS Code settings suggestion
-        vscode_settings = {
-            "yaml.schemas": {
-                rel_path: [
-                    "mcp-agent.config.yaml",
-                    "mcp_agent.config.yaml",
-                    "mcp-agent.secrets.yaml",
-                    "mcp_agent.secrets.yaml",
-                ]
-            }
-        }
-        console.print("\n[yellow]VS Code Integration:[/]")
-        console.print("Add this to .vscode/settings.json:")
-        console.print(json.dumps(vscode_settings, indent=2))
-
-    except Exception as e:
-        console.print(f"[red]Error generating schema:[/] {str(e)}")
-        raise typer.Exit(1)
+    except Exception as err:
+        console.print(f"[red]Error generating schema:[/] {err}")
+        raise typer.Exit(1) from err
 
 
 if __name__ == "__main__":

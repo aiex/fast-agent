@@ -3,9 +3,9 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field
 
-from mcp_agent.core.fastagent import FastAgent
-from mcp_agent.core.prompt import Prompt
-from mcp_agent.core.request_params import RequestParams
+from fast_agent import FastAgent
+from fast_agent.llm.request_params import RequestParams
+from fast_agent.mcp.prompt import Prompt
 
 # Create the application
 fast = FastAgent("fast-agent example")
@@ -23,7 +23,7 @@ class FormattedResponse(BaseModel):
     name="chat",
     instruction="You are a helpful AI Agent",
     servers=["fetch"],
-    request_params=RequestParams(maxTokens=8192),
+    request_params=RequestParams(max_tokens=8192),
 )
 async def main():
     # use the --model command line switch or agent arguments to change model

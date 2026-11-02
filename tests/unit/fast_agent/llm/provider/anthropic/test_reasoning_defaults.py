@@ -1,0 +1,1360 @@
+"""Tests for Anthropic reasoning defaults and adaptive thinking behavior."""
+
+import json
+from typing import Any, cast
+
+import pytest
+from anthropic.lib._parse._transform import transform_schema
+from anthropic.types.beta import (
+    BetaMessage,
+    BetaRefusalStopDetails,
+    BetaTextBlock,
+    BetaToolUseBlock,
+    BetaUsage,
+)
+from mcp import Tool
+from mcp_types import TextContent
+from pydantic import BaseModel
+
+from fast_agent.config import AnthropicSettings, Settings
+from fast_agent.constants import FAST_AGENT_SAFETY_DETAILS
+from fast_agent.context import Context
+from fast_agent.llm.model_database import ModelDatabase
+from fast_agent.llm.provider.anthropic.llm_anthropic import (
+    FINE_GRAINED_TOOL_STREAMING_BETA,
+    STRUCTURED_OUTPUT_BETA,
+    STRUCTURED_OUTPUT_TOOL_NAME,
+    TEST_REFUSAL_TRIGGER_ENV,
+    AnthropicLLM,
+)
+from fast_agent.llm.provider.anthropic.llm_anthropic_vertex import AnthropicVertexLLM
+from fast_agent.llm.provider.copilot.messages import CopilotMessagesLLM
+from fast_agent.llm.reasoning_effort import ReasoningEffortSetting, is_auto_reasoning
+from fast_agent.llm.request_params import RequestParams
+from fast_agent.mcp.prompt import Prompt
+from fast_agent.types.llm_stop_reason import LlmStopReason
+
+
+def _make_llm(
+    model: str,
+    reasoning: str | int | bool | None = None,
+    *,
+    long_context: bool = False,
+) -> AnthropicLLM:
+    settings = Settings()
+    settings.anthropic = AnthropicSettings(api_key="test-key", reasoning=reasoning)
+    context = Context(config=settings)
+    return AnthropicLLM(
+        context=context,
+        model=model,
+        name="test-agent",
+        long_context=long_context,
+    )
+
+
+def _make_vertex_llm(
+    model: str,
+    reasoning: str | int | bool | None = None,
+    *,
+    long_context: bool = False,
+) -> AnthropicVertexLLM:
+    settings = Settings()
+    settings.anthropic = AnthropicSettings(api_key="test-key", reasoning=reasoning)
+    settings.anthropic.vertex_ai.enabled = True
+    settings.anthropic.vertex_ai.project_id = "test-project"
+    settings.anthropic.vertex_ai.location = "us-east5"
+    context = Context(config=settings)
+    return AnthropicVertexLLM(
+        context=context,
+        model=model,
+        name="test-agent",
+        long_context=long_context,
+    )
+
+
+class _StructuredResponse(BaseModel):
+    answer: str
+
+
+class _StructuredResponseWithMap(BaseModel):
+    metadata: dict[str, str]
+
+
+class StructuredSample(BaseModel):
+    name: str
+    count: int = 3
+    tags: dict[str, str]
+
+
+def test_opus_46_uses_adaptive_thinking_by_default():
+    llm = _make_llm("claude-opus-4-6")
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-4-6",
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive"}
+    # No explicit effort — the API uses its built-in automatic mode
+    assert "output_config" not in args
+    assert args["max_tokens"] == 16000
+
+
+def test_opus_46_default_reasoning_effort_is_auto():
+    """When no reasoning is configured, reasoning_effort should be 'auto'."""
+    llm = _make_llm("claude-opus-4-6")
+    assert is_auto_reasoning(llm.reasoning_effort)
+
+
+def test_opus_46_supports_max_effort():
+    llm = _make_llm("claude-opus-4-6", reasoning="max")
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-4-6",
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive"}
+    assert args["output_config"] == {"effort": "max"}
+
+
+def test_opus_47_requests_summarized_adaptive_thinking_by_default():
+    llm = _make_llm("claude-opus-4-7")
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-4-7",
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert "output_config" not in args
+
+
+def test_opus_47_supports_xhigh_effort():
+    llm = _make_llm("claude-opus-4-7", reasoning="xhigh")
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-4-7",
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert args["output_config"] == {"effort": "xhigh"}
+
+
+@pytest.mark.parametrize("model", ["claude-fable-5", "claude-fable-5-1"])
+def test_fable_5_requests_summarized_thinking_and_uses_provider_default_effort(model: str):
+    llm = _make_llm(model)
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model=model,
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert "output_config" not in args
+    assert args["max_tokens"] == 16000
+
+
+@pytest.mark.parametrize("model", ["claude-fable-5", "claude-fable-5-1"])
+def test_fable_5_does_not_allow_reasoning_disable(model: str):
+    llm = _make_llm(model, reasoning=False)
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model=model,
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert "output_config" not in args
+
+
+@pytest.mark.parametrize("model", ["claude-fable-5", "claude-fable-5-1"])
+def test_fable_5_supports_xhigh_effort_with_summarized_thinking(model: str):
+    llm = _make_llm(model, reasoning="xhigh")
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model=model,
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert args["output_config"] == {"effort": "xhigh"}
+
+
+def test_fable_5_tool_forced_structured_output_keeps_always_on_thinking():
+    llm = _make_llm("claude-fable-5")
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-fable-5",
+        max_tokens=16000,
+        structured_mode="tool_use",
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert "output_config" not in args
+
+
+def test_sonnet_5_requests_summarized_adaptive_thinking():
+    llm = _make_llm("claude-sonnet-5")
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-sonnet-5",
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert "output_config" not in args
+    assert args["max_tokens"] == 16000
+
+
+def test_sonnet_5_can_disable_adaptive_thinking():
+    llm = _make_llm("claude-sonnet-5", reasoning=False)
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-sonnet-5",
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert not thinking_enabled
+    assert args["thinking"] == {"type": "disabled"}
+    assert args["max_tokens"] == 16000
+
+
+def test_sonnet_5_supports_xhigh_effort_with_summarized_thinking():
+    llm = _make_llm("claude-sonnet-5", reasoning="xhigh")
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-sonnet-5",
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert args["output_config"] == {"effort": "xhigh"}
+
+
+def test_opus_5_requests_summarized_adaptive_thinking():
+    llm = _make_llm("claude-opus-5")
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-5",
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert "output_config" not in args
+    assert args["max_tokens"] == 16000
+
+
+def test_opus_5_can_disable_adaptive_thinking():
+    llm = _make_llm("claude-opus-5", reasoning=False)
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-5",
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert not thinking_enabled
+    assert args["thinking"] == {"type": "disabled"}
+
+
+def test_opus_47_task_budget_merges_into_output_config() -> None:
+    llm = _make_llm("claude-opus-4-7")
+    llm.set_task_budget_tokens(128_000)
+
+    args, thinking_enabled = llm._build_anthropic_base_args(
+        model="claude-opus-4-7",
+        messages=[],
+        params=RequestParams(max_tokens=1024),
+        history=None,
+        current_extended=None,
+        request_tools=[],
+        structured_mode=None,
+        structured_model=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert args["output_config"]["task_budget"] == {"type": "tokens", "total": 128_000}
+
+
+def test_opus_47_task_budget_adds_beta_flag() -> None:
+    llm = _make_llm("claude-opus-4-7")
+    llm.set_task_budget_tokens(64_000)
+
+    beta_flags = llm._resolve_anthropic_beta_flags(
+        model="claude-opus-4-7",
+        structured_mode=None,
+        thinking_enabled=True,
+        request_tools=[],
+        web_tool_betas=[],
+    )
+
+    assert "task-budgets-2026-03-13" in beta_flags
+
+
+def test_vertex_opus_47_task_budget_merges_into_output_config() -> None:
+    llm = _make_vertex_llm("claude-opus-4-7")
+    llm.set_task_budget_tokens(128_000)
+
+    args, thinking_enabled = llm._build_anthropic_base_args(
+        model="claude-opus-4-7",
+        messages=[],
+        params=RequestParams(max_tokens=1024),
+        history=None,
+        current_extended=None,
+        request_tools=[],
+        structured_mode=None,
+        structured_model=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert args["output_config"]["task_budget"] == {"type": "tokens", "total": 128_000}
+
+
+def test_vertex_opus_47_task_budget_adds_beta_flag() -> None:
+    llm = _make_vertex_llm("claude-opus-4-7")
+    llm.set_task_budget_tokens(64_000)
+
+    beta_flags = llm._resolve_anthropic_beta_flags(
+        model="claude-opus-4-7",
+        structured_mode=None,
+        thinking_enabled=True,
+        request_tools=[],
+        web_tool_betas=[],
+    )
+
+    assert "task-budgets-2026-03-13" in beta_flags
+
+
+def test_opus_46_supports_disable_toggle():
+    llm = _make_llm("claude-opus-4-6", reasoning=False)
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-4-6",
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert not thinking_enabled
+    assert "thinking" not in args
+    assert args["max_tokens"] == 16000
+
+
+def test_opus_46_budget_falls_back_to_auto():
+    llm = _make_llm("claude-opus-4-6", reasoning=4096)
+
+    assert is_auto_reasoning(llm.reasoning_effort)
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-4-6",
+        max_tokens=4096,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive"}
+    assert "output_config" not in args
+    assert args["max_tokens"] == 4096
+
+
+def test_legacy_anthropic_models_still_use_budget_thinking_defaults():
+    llm = _make_llm("claude-opus-4-5")
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-4-5",
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert "output_config" not in args
+
+
+def test_legacy_models_map_effort_to_budget():
+    llm = _make_llm("claude-opus-4-5", reasoning="high")
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-4-5",
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "enabled", "budget_tokens": 32000}
+
+
+def test_legacy_models_accept_explicit_budget():
+    llm = _make_llm("claude-opus-4-5", reasoning=4096)
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-4-5",
+        max_tokens=4096,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+
+def test_tool_forced_structured_output_disables_thinking():
+    llm = _make_llm("claude-opus-4-6")
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-4-6",
+        max_tokens=16000,
+        structured_mode="tool_use",
+    )
+
+    assert not thinking_enabled
+    assert args == {"max_tokens": 16000}
+
+
+def test_opus_46_explicit_auto_uses_adaptive_no_effort():
+    """Explicitly passing 'auto' should behave same as default."""
+    llm = _make_llm("claude-opus-4-6", reasoning="auto")
+
+    assert is_auto_reasoning(llm.reasoning_effort)
+
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-4-6",
+        max_tokens=16000,
+        structured_mode=None,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive"}
+    assert "output_config" not in args
+
+
+def test_long_context_supported_models_source_from_model_database():
+    """Anthropic long-context supported list should come from ModelDatabase."""
+    llm = _make_llm("claude-opus-4-6")
+    assert llm._list_supported_long_context_models() == ModelDatabase.list_long_context_models()
+
+
+def test_46_models_ignore_explicit_long_context_flag():
+    """Claude 4.6 models already expose 1M context without an opt-in flag."""
+    llm = _make_llm("claude-opus-4-6", long_context=True)
+    assert llm._long_context is False
+    assert llm.model_info is not None
+    assert llm.model_info.context_window == 1_000_000
+
+
+def test_unsupported_model_keeps_long_context_disabled():
+    """Models without long_context_window metadata should not enable long context."""
+    llm = _make_llm("claude-haiku-4-5", long_context=True)
+    assert llm._long_context is False
+    assert llm.model_info is not None
+    assert llm.model_info.context_window == 200_000
+
+
+def test_json_structured_output_uses_output_config_format():
+    llm = _make_llm("claude-opus-4-6", reasoning=False)
+
+    args, thinking_enabled = llm._build_anthropic_base_args(
+        model="claude-opus-4-6",
+        messages=[],
+        params=RequestParams(max_tokens=1024),
+        history=None,
+        current_extended=None,
+        request_tools=[],
+        structured_mode="json",
+        structured_model=_StructuredResponse,
+    )
+
+    assert not thinking_enabled
+    assert "output_format" not in args
+    assert args["output_config"]["format"]["type"] == "json_schema"
+    assert "schema" in args["output_config"]["format"]
+
+
+def test_json_structured_output_sanitizes_map_additional_properties():
+    llm = _make_llm("claude-opus-4-6", reasoning=False)
+
+    args, _ = llm._build_anthropic_base_args(
+        model="claude-opus-4-6",
+        messages=[],
+        params=RequestParams(max_tokens=1024),
+        history=None,
+        current_extended=None,
+        request_tools=[],
+        structured_mode="json",
+        structured_model=_StructuredResponseWithMap,
+    )
+
+    metadata_schema = args["output_config"]["format"]["schema"]["properties"]["metadata"]
+    assert metadata_schema["additionalProperties"] is False
+
+
+def test_auto_structured_output_mode_prefers_json_when_direct_beta_supported():
+    llm = _make_llm("claude-opus-4-6", reasoning=False)
+
+    structured_mode = llm._resolve_structured_output_mode(
+        "claude-opus-4-6",
+        _StructuredResponse,
+    )
+
+    assert structured_mode == "json"
+
+
+def test_auto_structured_output_mode_falls_back_to_tool_use_for_legacy_model():
+    llm = _make_llm("claude-sonnet-4-0", reasoning=False)
+
+    structured_mode = llm._resolve_structured_output_mode(
+        "claude-sonnet-4-0",
+        _StructuredResponse,
+    )
+
+    assert structured_mode == "tool_use"
+
+
+def test_auto_tool_use_structured_fallback_detects_legacy_model():
+    llm = _make_llm("claude-sonnet-4-0", reasoning=False)
+
+    assert llm._is_auto_tool_use_structured_fallback(
+        "claude-sonnet-4-0",
+        "tool_use",
+        _StructuredResponse,
+    )
+
+
+def test_explicit_tool_use_mode_is_not_treated_as_auto_fallback():
+    settings = Settings()
+    settings.anthropic = AnthropicSettings(
+        api_key="test-key",
+        reasoning=False,
+        structured_output_mode="tool_use",
+    )
+    context = Context(config=settings)
+    llm = AnthropicLLM(
+        context=context,
+        model="claude-opus-4-6",
+        name="test-agent",
+    )
+
+    assert not llm._is_auto_tool_use_structured_fallback(
+        "claude-opus-4-6",
+        "tool_use",
+        _StructuredResponse,
+    )
+
+
+def test_json_structured_output_merges_with_adaptive_effort():
+    llm = _make_llm("claude-opus-4-6", reasoning="max")
+
+    args, thinking_enabled = llm._build_anthropic_base_args(
+        model="claude-opus-4-6",
+        messages=[],
+        params=RequestParams(max_tokens=1024),
+        history=None,
+        current_extended=None,
+        request_tools=[],
+        structured_mode="json",
+        structured_model=_StructuredResponse,
+    )
+
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive"}
+    assert args["output_config"]["effort"] == "max"
+    assert args["output_config"]["format"]["type"] == "json_schema"
+
+
+def test_anthropic_effort_none_normalizes_case_and_padding_for_thinking_enabled() -> None:
+    llm = _make_llm("claude-opus-4-6")
+    llm._reasoning_effort = ReasoningEffortSetting(
+        kind="effort",
+        value=cast("Any", " NONE "),
+    )
+
+    assert not llm._is_thinking_enabled("claude-opus-4-6")
+
+
+def test_anthropic_adaptive_effort_normalizes_case_and_padding() -> None:
+    llm = _make_llm("claude-opus-4-7")
+    llm._reasoning_effort = ReasoningEffortSetting(
+        kind="effort",
+        value=cast("Any", " XHIGH "),
+    )
+
+    assert llm._resolve_adaptive_effort("claude-opus-4-7") == "xhigh"
+
+
+def test_opus_47_drops_sampling_parameters_from_request_payload() -> None:
+    llm = _make_llm("claude-opus-4-7")
+
+    result = llm.prepare_provider_arguments(
+        {
+            "model": "claude-opus-4-7",
+            "messages": [],
+            "max_tokens": 1000,
+        },
+        RequestParams(temperature=0.7, top_p=0.9, top_k=10),
+        llm.ANTHROPIC_EXCLUDE_FIELDS,
+    )
+
+    assert "temperature" not in result
+    assert "top_p" not in result
+    assert "top_k" not in result
+
+
+def test_sonnet_45_moves_sampling_parameters_to_extra_body() -> None:
+    llm = _make_llm("claude-sonnet-4-5")
+    existing_extra_body = {"custom": True}
+
+    result = llm.prepare_provider_arguments(
+        {
+            "model": "claude-sonnet-4-5",
+            "messages": [],
+            "max_tokens": 1000,
+            "extra_body": existing_extra_body,
+        },
+        RequestParams(temperature=0.7, top_p=0.9, top_k=10),
+        llm.ANTHROPIC_EXCLUDE_FIELDS,
+    )
+
+    assert "temperature" not in result
+    assert "top_p" not in result
+    assert "top_k" not in result
+    assert result["extra_body"] == {
+        "custom": True,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "top_k": 10,
+    }
+    assert existing_extra_body == {"custom": True}
+
+
+def test_sonnet_45_explicit_extra_body_sampling_takes_precedence() -> None:
+    llm = _make_llm("claude-sonnet-4-5")
+
+    result = llm.prepare_provider_arguments(
+        {
+            "model": "claude-sonnet-4-5",
+            "messages": [],
+            "max_tokens": 1000,
+            "extra_body": {"temperature": 0.2},
+        },
+        RequestParams(temperature=0.7),
+        llm.ANTHROPIC_EXCLUDE_FIELDS,
+    )
+
+    assert result["extra_body"] == {"temperature": 0.2}
+
+
+def test_opus_5_drops_sampling_parameters_from_request_payload() -> None:
+    llm = _make_llm("claude-opus-5")
+
+    result = llm.prepare_provider_arguments(
+        {
+            "model": "claude-opus-5",
+            "messages": [],
+            "max_tokens": 1000,
+        },
+        RequestParams(temperature=0.7, top_p=0.9, top_k=10),
+        llm.ANTHROPIC_EXCLUDE_FIELDS,
+    )
+
+    assert "temperature" not in result
+    assert "top_p" not in result
+    assert "top_k" not in result
+
+
+def test_opus_5_drops_sampling_parameters_from_extra_body() -> None:
+    llm = _make_llm("claude-opus-5")
+
+    result = llm.prepare_provider_arguments(
+        {
+            "model": "claude-opus-5",
+            "messages": [],
+            "max_tokens": 1000,
+            "extra_body": {"temperature": 0.2, "custom": True},
+        },
+        RequestParams(),
+        llm.ANTHROPIC_EXCLUDE_FIELDS,
+    )
+
+    assert result["extra_body"] == {"custom": True}
+
+
+@pytest.mark.parametrize("model", ["claude-fable-5", "claude-fable-5-1"])
+def test_fable_5_drops_sampling_parameters_from_request_payload(model: str) -> None:
+    llm = _make_llm(model)
+
+    result = llm.prepare_provider_arguments(
+        {
+            "model": model,
+            "messages": [],
+            "max_tokens": 1000,
+        },
+        RequestParams(temperature=0.7, top_p=0.9, top_k=10),
+        llm.ANTHROPIC_EXCLUDE_FIELDS,
+    )
+
+    assert "temperature" not in result
+    assert "top_p" not in result
+    assert "top_k" not in result
+
+
+def test_sonnet_5_drops_sampling_parameters_from_request_payload() -> None:
+    llm = _make_llm("claude-sonnet-5")
+
+    result = llm.prepare_provider_arguments(
+        {
+            "model": "claude-sonnet-5",
+            "messages": [],
+            "max_tokens": 1000,
+        },
+        RequestParams(temperature=0.7, top_p=0.9, top_k=10),
+        llm.ANTHROPIC_EXCLUDE_FIELDS,
+    )
+
+    assert "temperature" not in result
+    assert "top_p" not in result
+    assert "top_k" not in result
+
+
+def test_refusal_stop_details_are_captured_in_response_channels() -> None:
+    llm = _make_llm("claude-fable-5")
+    response = BetaMessage(
+        id="msg_1",
+        type="message",
+        role="assistant",
+        content=[],
+        model="claude-fable-5",
+        stop_reason="refusal",
+        stop_sequence=None,
+        usage=BetaUsage(input_tokens=10, output_tokens=0),
+        stop_details=BetaRefusalStopDetails(
+            type="refusal",
+            category="frontier_llm",
+            explanation="Request requires frontier model handling.",
+            fallback_credit_token="fallback-token",
+            fallback_has_prefill_claim=True,
+            recommended_model="claude-fable-5-fallback",
+        ),
+    )
+
+    channels = llm._anthropic_response_channels(
+        response,
+        model="claude-fable-5",
+        thinking_segments=[],
+        tool_calls=None,
+    )
+
+    assert channels is not None
+    [details] = channels[FAST_AGENT_SAFETY_DETAILS]
+    assert isinstance(details, TextContent)
+    assert json.loads(details.text) == {
+        "provider": "anthropic",
+        "reason": "refusal",
+        "category": "frontier_llm",
+        "explanation": "Request requires frontier model handling.",
+        "fallback_credit_token": "fallback-token",
+        "fallback_has_prefill_claim": True,
+        "recommended_model": "claude-fable-5-fallback",
+    }
+
+
+def test_test_refusal_env_accepts_frontier_llm_category(monkeypatch) -> None:
+    monkeypatch.setenv(TEST_REFUSAL_TRIGGER_ENV, "frontier_llm")
+
+    assert AnthropicLLM._test_refusal_category() == "frontier_llm"
+
+
+@pytest.mark.asyncio
+async def test_test_refusal_env_manipulates_final_stop_after_response(monkeypatch) -> None:
+    monkeypatch.setenv(TEST_REFUSAL_TRIGGER_ENV, "bio")
+    llm = _make_llm("claude-fable-5")
+    response = BetaMessage(
+        id="msg_1",
+        type="message",
+        role="assistant",
+        content=[BetaTextBlock(type="text", text="streamed context remains visible")],
+        model="claude-fable-5",
+        stop_reason="end_turn",
+        stop_sequence=None,
+        usage=BetaUsage(input_tokens=10, output_tokens=4),
+    )
+
+    result = await llm._finalize_anthropic_response(
+        response=response,
+        model="claude-fable-5",
+        messages=[],
+        thinking_segments=[],
+        streamed_text_segments=[],
+        structured_mode=None,
+        structured_model=None,
+    )
+
+    assert result.stop_reason is LlmStopReason.SAFETY
+    assert result.last_text() == "streamed context remains visible"
+    assert result.channels is not None
+    [details] = result.channels[FAST_AGENT_SAFETY_DETAILS]
+    assert isinstance(details, TextContent)
+    assert json.loads(details.text) == {
+        "provider": "anthropic",
+        "reason": "refusal",
+        "category": "bio",
+    }
+
+
+def test_json_structured_output_uses_raw_schema_when_supplied() -> None:
+    llm = _make_llm("claude-opus-4-6", reasoning=False)
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+        "additionalProperties": False,
+    }
+
+    args, _ = llm._build_anthropic_base_args(
+        model="claude-opus-4-6",
+        messages=[],
+        params=RequestParams(max_tokens=1024, structured_schema=schema),
+        history=None,
+        current_extended=None,
+        request_tools=[],
+        structured_mode="json",
+        structured_model=None,
+        structured_schema=schema,
+    )
+
+    assert args["output_config"]["format"]["schema"] == schema
+
+
+def test_json_structured_output_transforms_raw_schema_with_anthropic_sdk() -> None:
+    llm = _make_llm("claude-opus-4-6", reasoning=False)
+    schema = {
+        "type": "object",
+        "properties": {
+            "answer": {
+                "type": "string",
+                "minLength": 3,
+            }
+        },
+        "required": ["answer"],
+    }
+
+    args, _ = llm._build_anthropic_base_args(
+        model="claude-opus-4-6",
+        messages=[],
+        params=RequestParams(max_tokens=1024, structured_schema=schema),
+        history=None,
+        current_extended=None,
+        request_tools=[],
+        structured_mode="json",
+        structured_model=None,
+        structured_schema=schema,
+    )
+
+    transformed = args["output_config"]["format"]["schema"]
+    answer_schema = transformed["properties"]["answer"]
+    assert transformed["additionalProperties"] is False
+    assert "minLength" not in answer_schema
+    assert "minLength: 3" in answer_schema["description"]
+    assert schema["properties"]["answer"]["minLength"] == 3
+
+
+def test_json_structured_output_matches_anthropic_sdk_for_model_and_raw_schema() -> None:
+    llm = _make_llm("claude-opus-4-6", reasoning=False)
+    raw_schema = StructuredSample.model_json_schema()
+
+    model_format = llm._build_output_format(StructuredSample)
+    raw_format = llm._build_output_format(None, raw_schema)
+
+    assert model_format["schema"] == transform_schema(StructuredSample)
+    assert raw_format["schema"] == transform_schema(raw_schema)
+    assert raw_format["schema"]["properties"]["tags"]["additionalProperties"] is False
+
+
+@pytest.mark.asyncio
+async def test_json_structured_output_preserves_regular_tools() -> None:
+    llm = _make_llm("claude-opus-4-6", reasoning=False)
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+        "additionalProperties": False,
+    }
+    tool = Tool(
+        name="lookup_probe_payload",
+        description="Return the probe payload for validation.",
+        input_schema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    )
+
+    tools = await llm._prepare_tools(
+        "claude-opus-4-6",
+        structured_model=None,
+        structured_schema=schema,
+        tools=[tool],
+        structured_mode="json",
+    )
+
+    assert len(tools) == 1
+    assert tools[0]["name"] == "lookup_probe_payload"
+    input_schema = dict(tools[0]["input_schema"])
+    assert input_schema.get("additionalProperties") is False
+
+
+def test_structured_schema_with_tools_is_deferred_until_tool_result() -> None:
+    llm = _make_llm("claude-sonnet-4-6", reasoning=False)
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+    }
+    tool = Tool(
+        name="lookup_probe_payload",
+        description="Return the probe payload for validation.",
+        input_schema={"type": "object", "properties": {}},
+    )
+    params = RequestParams(structured_schema=schema, structured_tool_policy="defer")
+
+    _, prepared_params = llm._prepare_structured_request(
+        [Prompt.user("call the tool, then return json")],
+        params,
+        [tool],
+    )
+
+    assert params.structured_schema == schema
+    assert prepared_params.structured_schema is None
+
+
+def test_structured_schema_with_no_tools_policy_preserves_schema_for_tool_suppression() -> None:
+    llm = _make_llm("claude-sonnet-4-6", reasoning=False)
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+    }
+    tool = Tool(
+        name="lookup_probe_payload",
+        description="Return the probe payload for validation.",
+        input_schema={"type": "object", "properties": {}},
+    )
+    params = RequestParams(structured_schema=schema, structured_tool_policy="no_tools")
+
+    _, prepared_params = llm._prepare_structured_request(
+        [Prompt.user("return json without calling tools")],
+        params,
+        [tool],
+    )
+
+    assert prepared_params.structured_schema == schema
+    assert llm._should_suppress_tools_for_structured_final(
+        [Prompt.user("return json without calling tools")],
+        prepared_params,
+        [tool],
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_use_structured_output_uses_raw_schema_when_supplied() -> None:
+    llm = _make_llm("claude-opus-4-6", reasoning=False)
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+    }
+
+    tools = await llm._prepare_tools(
+        "claude-opus-4-6",
+        structured_model=None,
+        structured_schema=schema,
+        tools=None,
+        structured_mode="tool_use",
+    )
+
+    input_schema = tools[0]["input_schema"]
+    assert isinstance(input_schema, dict)
+    properties = input_schema["properties"]
+    assert isinstance(properties, dict)
+    normalized_properties = {str(key): value for key, value in properties.items()}
+    answer_schema = normalized_properties.get("answer")
+    assert isinstance(answer_schema, dict)
+    normalized_answer_schema = {str(key): value for key, value in answer_schema.items()}
+    assert normalized_answer_schema.get("type") == "string"
+
+
+@pytest.mark.asyncio
+async def test_tool_use_structured_output_sanitizes_raw_schema_for_anthropic() -> None:
+    llm = _make_llm("claude-opus-4-6", reasoning=False)
+    schema = {
+        "type": "object",
+        "properties": {
+            "answer": {"type": "string"},
+            "context": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "default": None,
+            },
+        },
+        "required": ["answer"],
+    }
+
+    tools = await llm._prepare_tools(
+        "claude-opus-4-6",
+        structured_model=None,
+        structured_schema=schema,
+        tools=None,
+        structured_mode="tool_use",
+    )
+
+    input_schema = tools[0]["input_schema"]
+    assert isinstance(input_schema, dict)
+    normalized_input_schema = {str(key): value for key, value in input_schema.items()}
+    assert normalized_input_schema["additionalProperties"] is False
+    assert normalized_input_schema["required"] == ["answer"]
+    properties = normalized_input_schema["properties"]
+    assert isinstance(properties, dict)
+    normalized_properties = {str(key): value for key, value in properties.items()}
+    context_schema = normalized_properties["context"]
+    assert isinstance(context_schema, dict)
+    assert "default" not in context_schema
+    assert schema["properties"]["context"]["default"] is None
+
+
+@pytest.mark.asyncio
+async def test_tool_use_structured_schema_response_is_finalized_without_model() -> None:
+    llm = _make_llm("claude-sonnet-4-6", reasoning=False)
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+    }
+    response = BetaMessage(
+        id="msg_structured",
+        type="message",
+        role="assistant",
+        content=[
+            BetaToolUseBlock(
+                type="tool_use",
+                id="toolu_structured",
+                name=STRUCTURED_OUTPUT_TOOL_NAME,
+                input={"answer": "ok"},
+            )
+        ],
+        model="claude-sonnet-4-6",
+        stop_reason="tool_use",
+        usage=BetaUsage(input_tokens=10, output_tokens=20),
+    )
+
+    result = await llm._finalize_anthropic_response(
+        response=response,
+        model="claude-sonnet-4-6",
+        messages=[],
+        thinking_segments=[],
+        streamed_text_segments=[],
+        structured_mode="tool_use",
+        structured_model=None,
+        structured_schema=schema,
+    )
+
+    assert result.stop_reason == LlmStopReason.END_TURN
+    assert result.tool_calls is None
+    assert json.loads(result.last_text() or "{}") == {"answer": "ok"}
+
+
+def test_structured_output_json_adds_structured_output_beta() -> None:
+    llm = _make_llm("claude-opus-4-6")
+
+    beta_flags = llm._resolve_anthropic_beta_flags(
+        model="claude-opus-4-6",
+        structured_mode="json",
+        thinking_enabled=False,
+        request_tools=[],
+        web_tool_betas=[],
+    )
+
+    assert beta_flags == [STRUCTURED_OUTPUT_BETA]
+
+
+def test_structured_output_tool_use_does_not_add_structured_output_beta() -> None:
+    llm = _make_llm("claude-opus-4-6")
+
+    beta_flags = llm._resolve_anthropic_beta_flags(
+        model="claude-opus-4-6",
+        structured_mode="tool_use",
+        thinking_enabled=False,
+        request_tools=[],
+        web_tool_betas=[],
+    )
+
+    assert beta_flags == []
+
+
+def test_structured_output_modes_still_preserve_other_beta_flags() -> None:
+    llm = _make_llm("claude-opus-4-6")
+
+    beta_flags = llm._resolve_anthropic_beta_flags(
+        model="claude-opus-4-6",
+        structured_mode="json",
+        thinking_enabled=False,
+        request_tools=[{"name": "demo", "description": "", "input_schema": {"type": "object"}}],
+        web_tool_betas=["web-beta"],
+    )
+
+    # Direct Anthropic streams tool input via per-tool eager_input_streaming instead.
+    assert FINE_GRAINED_TOOL_STREAMING_BETA not in beta_flags
+    assert STRUCTURED_OUTPUT_BETA in beta_flags
+    assert "web-beta" in beta_flags
+
+
+@pytest.mark.parametrize("choice", ["auto", "none", "any", "tool"])
+@pytest.mark.parametrize("in_extra_body", [False, True])
+@pytest.mark.parametrize(
+    "model", ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-5.5"]
+)
+def test_always_on_tool_choice_contract(choice: str, in_extra_body: bool, model: str) -> None:
+    llm = _make_llm(model)
+    tool_args = {"tool_choice": {"type": choice}}
+    base_args = {"model": model, "messages": [], "max_tokens": 1000}
+    base_args.update({"extra_body": tool_args} if in_extra_body else tool_args)
+    if choice in {"any", "tool"}:
+        with pytest.raises(ValueError, match="does not support forced tool use"):
+            llm.prepare_provider_arguments(base_args, RequestParams())
+    else:
+        result = llm.prepare_provider_arguments(base_args, RequestParams())
+        payload = result["extra_body"] if in_extra_body else result
+        assert payload["tool_choice"] == {"type": choice}
+
+
+def test_fable_51_max_effort_and_native_structured_output() -> None:
+    llm = _make_llm("claude-fable-5-1", reasoning="max")
+    assert llm._resolve_structured_output_mode("claude-fable-5-1", _StructuredResponse) == "json"
+    args, enabled = llm._resolve_thinking_arguments(
+        model="claude-fable-5-1", max_tokens=128000, structured_mode="json"
+    )
+    assert enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert args["output_config"] == {"effort": "max"}
+
+
+def test_fable_51_drops_extra_body_sampling() -> None:
+    llm = _make_llm("claude-fable-5-1")
+    result = llm.prepare_provider_arguments(
+        {
+            "model": "claude-fable-5-1",
+            "extra_body": {"temperature": 0.5, "top_p": 0.8, "top_k": 10},
+        },
+        RequestParams(),
+    )
+    assert "extra_body" not in result
+
+
+@pytest.mark.parametrize("reasoning", [None, False, "medium", 1024])
+def test_opus_55_always_on_defaults_to_medium(reasoning: str | int | bool | None) -> None:
+    llm = _make_llm("claude-opus-5-5", reasoning=reasoning)
+    args, enabled = llm._resolve_thinking_arguments(
+        model="claude-opus-5-5", max_tokens=128000, structured_mode="json"
+    )
+    assert enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert args["output_config"] == {"effort": "medium"}
+    assert llm._resolve_structured_output_mode("claude-opus-5-5", _StructuredResponse) == "json"
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
+def test_opus_55_supported_efforts_reach_request(effort: str) -> None:
+    model = "claude-opus-5-5"
+    llm = _make_llm(model, reasoning=effort)
+    args, enabled = llm._resolve_thinking_arguments(
+        model=model, max_tokens=128000, structured_mode="json"
+    )
+    assert enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert args["output_config"] == {"effort": effort}
+
+
+@pytest.mark.parametrize("in_extra_body", [False, True])
+@pytest.mark.parametrize(
+    "thinking",
+    [
+        {"type": "disabled"},
+        {"type": "enabled", "budget_tokens": 1024},
+        {"type": "adaptive", "budget_tokens": 1024},
+    ],
+)
+def test_opus_55_rejects_thinking_overrides(in_extra_body: bool, thinking: dict) -> None:
+    llm = _make_llm("claude-opus-5-5")
+    override = {"thinking": thinking}
+    args = {"model": "claude-opus-5-5"}
+    args.update({"extra_body": override} if in_extra_body else override)
+    with pytest.raises(ValueError, match="always-on adaptive"):
+        llm.prepare_provider_arguments(args, RequestParams())
+
+
+def test_opus_55_preserves_empty_signed_thinking_and_text() -> None:
+    llm = _make_llm("claude-opus-5-5")
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "opaque"},
+                {"type": "text", "text": "Checking the result."},
+                {"type": "tool_use", "id": "call", "name": "check", "input": {}},
+            ],
+        }
+    ]
+    result = llm.prepare_provider_arguments(
+        {
+            "model": "claude-opus-5-5",
+            "messages": messages,
+            "temperature": 0.5,
+            "extra_body": {"top_p": 0.8, "top_k": 10},
+        },
+        RequestParams(),
+    )
+    assert result["messages"] == messages
+    assert "temperature" not in result
+    assert "extra_body" not in result
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "claude-sonnet-5.5"])
+@pytest.mark.parametrize("reasoning", [None, "auto", False, "low", "medium", "high"])
+def test_sonnet_55_reasoning_request(model: str, reasoning: str | bool | None) -> None:
+    llm = (
+        CopilotMessagesLLM(
+            context=Context(config=Settings()), model=model, reasoning_effort=reasoning
+        )
+        if model == "claude-sonnet-5.5"
+        else _make_llm(model, reasoning=reasoning)
+    )
+    args, enabled = llm._resolve_thinking_arguments(
+        model=model, max_tokens=128000, structured_mode="json"
+    )
+    result = args
+    assert result["max_tokens"] == 128000
+    if reasoning is False:
+        assert not enabled
+        assert result["thinking"] == {"type": "between_tools"}
+        assert "output_config" not in result
+    else:
+        assert enabled
+        assert result["thinking"] == {"type": "adaptive", "display": "summarized"}
+        if reasoning in {"low", "medium", "high"}:
+            assert result["output_config"] == {"effort": reasoning}
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "claude-sonnet-5.5"])
+@pytest.mark.parametrize("in_extra_body", [False, True])
+@pytest.mark.parametrize(
+    "thinking",
+    [
+        {"type": "disabled"},
+        {"type": "enabled", "budget_tokens": 1024},
+        {"type": "adaptive", "budget_tokens": 1024},
+        {"type": "between_tools", "budget_tokens": 1024},
+        {"type": "between_tools", "display": "summarized"},
+    ],
+)
+def test_sonnet_55_rejects_invalid_thinking(
+    model: str, in_extra_body: bool, thinking: dict[str, object]
+) -> None:
+    llm = _make_llm(model)
+    override = {"thinking": thinking}
+    args = {"model": model, **({"extra_body": override} if in_extra_body else override)}
+    with pytest.raises(ValueError, match="Sonnet 5.5 requires"):
+        llm.prepare_provider_arguments(args, RequestParams())
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "claude-sonnet-5.5"])
+@pytest.mark.parametrize("in_extra_body", [False, True])
+@pytest.mark.parametrize("thinking_type", ["adaptive", "between_tools"])
+@pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
+def test_sonnet_55_effort_contract(
+    model: str, in_extra_body: bool, thinking_type: str, effort: str
+) -> None:
+    llm = _make_llm(model)
+    override = {"thinking": {"type": thinking_type}, "output_config": {"effort": effort}}
+    args = {"model": model, **({"extra_body": override} if in_extra_body else override)}
+    if thinking_type == "between_tools" and effort in {"xhigh", "max"}:
+        with pytest.raises(ValueError, match="only low, medium, or high"):
+            llm.prepare_provider_arguments(args, RequestParams())
+    else:
+        result = llm.prepare_provider_arguments(args, RequestParams())
+        payload = result["extra_body"] if in_extra_body else result
+        assert payload["thinking"] == {"type": thinking_type}
+        assert payload["output_config"] == {"effort": effort}
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "claude-sonnet-5.5"])
+def test_sonnet_55_drops_sampling(model: str) -> None:
+    llm = _make_llm(model)
+    result = llm.prepare_provider_arguments(
+        {
+            "model": model,
+            "temperature": 0.5,
+            "top_p": 0.8,
+            "top_k": 10,
+            "extra_body": {"temperature": 0.3, "top_p": 0.7, "top_k": 20},
+        },
+        RequestParams(),
+    )
+    assert not {"temperature", "top_p", "top_k", "extra_body"} & result.keys()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vertex", [False, True])
+async def test_tool_input_streaming_uses_eager_field_or_vertex_beta(vertex: bool) -> None:
+    llm = _make_vertex_llm("claude-sonnet-4-6") if vertex else _make_llm("claude-sonnet-4-6")
+    tools = await llm._prepare_tools(
+        "claude-sonnet-4-6", tools=[Tool(name="demo", input_schema={"type": "object"})]
+    )
+    beta_flags = llm._resolve_anthropic_beta_flags(
+        model="claude-sonnet-4-6",
+        structured_mode=None,
+        thinking_enabled=False,
+        request_tools=tools,
+        web_tool_betas=[],
+    )
+
+    assert ("eager_input_streaming" in tools[0]) is not vertex
+    assert (FINE_GRAINED_TOOL_STREAMING_BETA in beta_flags) is vertex
+
+
+def test_haiku_55_summarized_adaptive_thinking_strips_sampling_and_allows_forced_tools():
+    llm = _make_llm("claude-haiku-5-5", reasoning="xhigh")
+    args, thinking_enabled = llm._resolve_thinking_arguments(
+        model="claude-haiku-5-5", max_tokens=16000, structured_mode=None
+    )
+    assert thinking_enabled
+    assert args["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert args["output_config"] == {"effort": "xhigh"}
+
+    forced = {"type": "tool", "name": "lookup"}
+    result = llm.prepare_provider_arguments(
+        {"model": "claude-haiku-5-5", "messages": [], "max_tokens": 1000, "tool_choice": forced},
+        RequestParams(temperature=0.2),
+    )
+    assert "temperature" not in result
+    assert result["tool_choice"] == forced

@@ -8,7 +8,7 @@ This test covers the modes not tested in other files:
 
 import pytest
 
-from mcp_agent.logging.logger import get_logger
+from fast_agent.core.logging.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 @pytest.mark.asyncio
 async def test_auto_cancel_mode(fast_agent):
     """Test that auto_cancel mode works when configured."""
-    
+
     @fast_agent.agent(
         "auto-cancel-agent",
         servers=["elicitation_auto_cancel_mode"],
@@ -24,10 +24,11 @@ async def test_auto_cancel_mode(fast_agent):
     )
     async def test_agent():
         async with fast_agent.run() as agent:
+            app = agent["auto-cancel-agent"]
             # This should auto-cancel due to config
             # Auto-cancel might result in an exception or a cancellation response
             try:
-                result = await agent.get_resource("elicitation://generate")
+                result = await app.call_tool("simple_rating", {})
                 print(f"Result: {result}")
                 # If we get a result, it should indicate cancellation
                 result_str = str(result).lower()
@@ -39,14 +40,14 @@ async def test_auto_cancel_mode(fast_agent):
                 # Auto-cancel might result in an exception, which is also valid
                 print(f"Auto-cancel test result: {e}")
                 print("✓ Auto-cancel mode working (cancelled as expected)")
-    
+
     await test_agent()
 
 
 @pytest.mark.asyncio
 async def test_none_mode(fast_agent):
     """Test that 'none' mode disables elicitation capability advertisement."""
-    
+
     @fast_agent.agent(
         "no-elicitation-agent",
         servers=["elicitation_none_mode"],
@@ -54,15 +55,16 @@ async def test_none_mode(fast_agent):
     )
     async def test_agent():
         async with fast_agent.run() as agent:
+            app = agent["no-elicitation-agent"]
             # Check capabilities reported by server
-            result = await agent.get_resource("elicitation://client-capabilities")
+            result = await app.call_tool("client_capabilities", {})
             capabilities_text = str(result)
             print(f"Server reports capabilities: {capabilities_text}")
-            
+
             # Should NOT have elicitation capability
-            assert "✗ Elicitation" in capabilities_text or "✓ Elicitation" not in capabilities_text, (
-                f"None mode should NOT advertise elicitation capability. Got: {capabilities_text}"
-            )
+            assert (
+                "✗ Elicitation" in capabilities_text or "✓ Elicitation" not in capabilities_text
+            ), f"None mode should NOT advertise elicitation capability. Got: {capabilities_text}"
             print("✓ None mode working - elicitation capability NOT advertised")
-    
+
     await test_agent()

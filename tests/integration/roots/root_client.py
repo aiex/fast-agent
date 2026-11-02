@@ -1,8 +1,8 @@
 import anyio
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.types import ListRootsResult, Root
-from pydantic import AnyUrl
+from mcp_types import ListRootsResult, Root
+from pydantic import FileUrl
 
 
 async def list_roots_callback(context):
@@ -10,11 +10,11 @@ async def list_roots_callback(context):
     return ListRootsResult(
         roots=[
             Root(
-                uri=AnyUrl("file://foo/bar"),
+                uri=FileUrl("file://foo/bar"),
                 name="Home Directory",
             ),
             Root(
-                uri=AnyUrl("file:///tmp"),
+                uri=FileUrl("file:///tmp"),
                 name="Temp Directory",
             ),
         ]
@@ -31,7 +31,9 @@ async def main():
     # Connect to the server via stdio
     async with stdio_client(server_params) as (read_stream, write_stream):
         # Create a client session
-        async with ClientSession(read_stream, write_stream, list_roots_callback=list_roots_callback) as session:
+        async with ClientSession(
+            read_stream, write_stream, list_roots_callback=list_roots_callback
+        ) as session:
             # Initialize the session
             await session.initialize()
 

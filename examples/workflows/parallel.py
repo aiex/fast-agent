@@ -5,8 +5,8 @@ Parallel Workflow showing Fan Out and Fan In agents, using different models
 import asyncio
 from pathlib import Path
 
-from mcp_agent.core.fastagent import FastAgent
-from mcp_agent.core.prompt import Prompt
+from fast_agent import FastAgent
+from fast_agent.mcp.prompt import Prompt
 
 # Create the application
 fast = FastAgent(
@@ -53,4 +53,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())  # type: ignore
+    asyncio.run(main())

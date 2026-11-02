@@ -1,0 +1,176 @@
+/* fast-agent social cards · 1200 × 630.
+   Brand tokens come from docs/docs/assets/forward/tokens (linked by template.html).
+   Rules: flat colour, 2px keylines, solid offset shadows only, one shout per card. */
+
+html, body { margin: 0; padding: 0; }
+
+.card {
+  --ink: var(--petrol);
+  --ink-muted: var(--text-muted);
+  --ground: var(--ivory);
+  --keyline: var(--petrol);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 1200px;
+  height: 630px;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--ground);
+  font: 500 16px/1.6 var(--font-read);
+  -webkit-font-smoothing: antialiased;
+}
+.card.scheme-petrol {
+  --ink: var(--ivory);
+  --ink-muted: rgba(255, 247, 232, 0.76);
+  --ground: var(--petrol);
+  --keyline: var(--ivory);
+}
+
+/* ── Header: tile + wordmark, small uppercase section label ─────────── */
+.card header {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  height: 128px;
+  padding: 0 64px;
+  flex: none;
+}
+.card header .tile { width: 60px; height: 60px; display: block; }
+.card header .wordmark {
+  font: 900 40px/1 var(--font-voice);
+  font-variation-settings: var(--voice-settings);
+  letter-spacing: var(--track-voice);
+}
+.card header .label {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
+  font: 700 18px/1 var(--font-read);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+.card header .label i { width: 34px; height: 6px; border-radius: 3px; background: var(--amber); }
+
+/* ── Body: voice headline + read lede, art column on the right ─────── */
+.card .body {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 64px 24px;
+  max-width: 700px;
+  box-sizing: border-box;
+  z-index: 2;
+}
+.card .title {
+  margin: 0;
+  font: 900 var(--title-size, 72px)/var(--lh-tight) var(--font-voice);
+  font-variation-settings: var(--voice-settings);
+  letter-spacing: var(--track-voice);
+  text-wrap: balance;
+}
+.card .lede {
+  margin: 26px 0 0;
+  color: var(--ink-muted);
+  font: 500 27px/1.38 var(--font-read);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.card .art { position: absolute; z-index: 1; }
+
+/* ── Footer: amber band means fast-agent ───────────────────────────── */
+.card footer {
+  display: flex;
+  align-items: center;
+  height: 76px;
+  padding: 0 64px;
+  flex: none;
+  color: var(--petrol);
+  background: var(--amber);
+  border-top: 2px solid var(--petrol);
+  position: relative;
+  z-index: 3;
+}
+.card footer span { white-space: nowrap; }
+.card footer .url { font: 500 24px/1 var(--font-code); }
+.card footer .repo {
+  margin-left: auto;
+  font: 700 16px/1 var(--font-read);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+/* Masked marks take their colour from background-color. */
+.mark { position: absolute; display: block; mask: var(--src) center / contain no-repeat; }
+.mark.teal { background: var(--teal); }
+.mark.amber { background: var(--amber); }
+.mark.ink { background: var(--ink); }
+.mark.orange { background: var(--orange); }
+
+/* ── design: sparkles ──────────────────────────────────────────────── */
+.d-sparkles .art { inset: 0; }
+
+/* ── design: burst ─────────────────────────────────────────────────── */
+.d-burst .body { max-width: 760px; }
+.d-burst .art { right: 56px; top: 132px; width: 360px; height: 360px; display: grid; place-items: center; }
+.d-burst .art .shout {
+  position: relative;
+  font: 400 var(--shout-size, 88px)/1 var(--font-shout);
+  color: var(--petrol);
+  transform: rotate(var(--tilt));
+  text-shadow: 3px 4px 0 var(--ivory);
+}
+
+/* ── design: presenter (framed panel of the approved pose sheet) ─── */
+/* The frame stands on the footer band, which supplies its bottom keyline. */
+.d-presenter .body { max-width: 760px; }
+.d-presenter .art {
+  right: 64px;
+  bottom: 76px;
+  overflow: hidden;
+  background: #fefae9;
+  border: 2px solid var(--keyline);
+  border-bottom: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+.d-presenter .art img { position: absolute; max-width: none; }
+.d-presenter .art .patch { position: absolute; background: #fefae9; }
+.d-presenter .art .chart { position: absolute; overflow: visible; }
+.d-presenter .art + .mark { z-index: 2; }
+
+/* ── design: terminal ──────────────────────────────────────────────── */
+.d-terminal .art { right: 40px; bottom: 96px; width: 450px; }
+.d-terminal .art img { display: block; width: 100%; }
+
+/* ── design: hero ──────────────────────────────────────────────────── */
+.d-hero .hero { flex: 1; display: grid; grid-template-columns: 500px 1fr; align-items: center; padding: 0 64px 0 32px; }
+.d-hero .hero-mark { position: relative; display: grid; place-items: center; height: 470px; }
+.d-hero .hero-mark h1 {
+  position: relative;
+  margin: 0;
+  color: var(--petrol);
+  font: 900 168px/0.86 var(--font-voice);
+  font-variation-settings: var(--voice-settings);
+  letter-spacing: -0.065em;
+  text-shadow: 3px 4px 0 var(--ivory);
+  transform: rotate(-7deg);
+}
+.d-hero .hero-copy { position: relative; z-index: 2; }
+.d-hero .hero-copy .title { --title-size: 66px; }
+.d-hero .install {
+  display: inline-block;
+  margin-top: 34px;
+  padding: 14px 22px;
+  color: var(--petrol);
+  background: var(--paper);
+  border: 2px solid var(--petrol);
+  border-radius: var(--radius-md);
+  box-shadow: 0 5px 0 var(--amber);
+  font: 500 24px/1 var(--font-code);
+}
+.d-hero .install::before { content: "$ "; color: var(--amber-ink); }

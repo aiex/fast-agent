@@ -3,8 +3,8 @@
 # Default Model Configuration:
 #
 # Takes format:
-#   <provider>.<model_string>.<reasoning_effort?> (e.g. anthropic.claude-3-5-sonnet-20241022 or openai.o3-mini.low)
-# Accepts aliases for Anthropic Models: haiku, haiku3, sonnet, sonnet35, opus, opus3
+#   <provider>.<model_string>?reasoning=<value> (e.g. anthropic.claude-3-5-sonnet-20241022 or openai.o3-mini?reasoning=low)
+# Accepts aliases for Anthropic Models: haiku, haiku45, sonnet, sonnet4, sonnet46, opus, opus4, opus46, opus47
 # and OpenAI Models: gpt-4o-mini, gpt-4o, o1, o1-mini, o3-mini
 #
 # If not specified, defaults to "haiku".
@@ -32,20 +32,20 @@ logger:
 mcp:
   servers:
     prompts:
-      command: "prompt-server"
-      args: ["playback.md"]
+      command: "uv"
+      args: ["run", "mcp_playback_prompt.py"]
     prompts2:
-      command: "prompt-server"
-      args: ["prompt.txt"]
+      command: "uv"
+      args: ["run", "mcp_single_prompt.py"]
     std_io:
       command: "uv"
-      args: ["run", "integration_agent.py", "--server", "--transport", "stdio"]
+      args: ["run", "integration_agent.py", "--transport", "stdio"]
     sse:
       transport: "sse"
-      url: "http://localhost:8723/sse"
+      url: "http://localhost:${FAST_AGENT_TEST_SSE_PORT:8723}/sse"
     http:
       transport: "http"
-      url: "http://localhost:8724/mcp"
+      url: "http://localhost:${FAST_AGENT_TEST_HTTP_PORT:8724}/mcp"
     card_test:
       command: "uv"
       args: ["run", "mcp_tools_server.py"]
@@ -58,14 +58,14 @@ mcp:
     hyphen-test:
       command: "uv"
       args: ["run", "mcp_tools_server.py"]
-    # borrows config from prompt-server
     cwd_test:
-      command: "prompt-server"
-      args: ["multi.txt"]
-      cwd: "../prompt-server/"
+      command: "uv"
+      args: ["run", "mcp_cwd_prompt.py"]
+      cwd: "cwd_fixture"
     dynamic_tool:
       command: "uv"
       args: ["run", "mcp_dynamic_tools.py"]
+      protocol_mode: legacy
     progress_test:
       command: "uv"
       args: ["run", "mcp_progress_server.py"]

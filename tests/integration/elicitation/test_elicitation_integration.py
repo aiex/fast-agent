@@ -3,40 +3,40 @@ Integration tests for elicitation handler functionality.
 
 These tests verify that:
 1. Custom elicitation handlers work correctly (decorator precedence)
-2. Config-based elicitation modes work (auto_cancel, forms, none)
+2. Config-based elicitation modes work (auto-cancel, forms, none)
 3. Elicitation capabilities are properly advertised to servers
 """
 
-from typing import TYPE_CHECKING, Any, Dict
+from typing import Any
 
 import pytest
-from mcp.shared.context import RequestContext
-from mcp.types import ElicitRequestParams, ElicitResult
+from mcp.client.session import ClientRequestContext
+from mcp_types import ElicitRequestParams, ElicitResult
 
-from mcp_agent.logging.logger import get_logger
-
-if TYPE_CHECKING:
-    from mcp import ClientSession
+from fast_agent.core.logging.logger import get_logger
 
 logger = get_logger(__name__)
 
+type ElicitationContent = dict[str, str | int | float | list[str] | None]
+
 
 async def custom_test_elicitation_handler(
-    context: RequestContext["ClientSession", Any],
+    context: ClientRequestContext,
     params: ElicitRequestParams,
 ) -> ElicitResult:
     """Test handler that returns predictable responses for integration testing."""
     logger.info(f"Test elicitation handler called with: {params.message}")
-    
-    if params.requestedSchema:
+
+    requested_schema = getattr(params, "requested_schema", None)
+    if requested_schema:
         # Generate test data based on the schema for round-trip verification
-        properties = params.requestedSchema.get("properties", {})
-        content: Dict[str, Any] = {}
-        
+        properties = requested_schema.get("properties", {})
+        content: dict[str, Any] = {}
+
         # Provide test values for each field
         for field_name, field_def in properties.items():
             field_type = field_def.get("type", "string")
-            
+
             if field_type == "string":
                 if field_name == "name":
                     content[field_name] = "Test User"
@@ -64,12 +64,12 @@ async def custom_test_elicitation_handler(
                 content[field_name] = ["test-item"]
             elif field_type == "object":
                 content[field_name] = {"test": "value"}
-        
+
         logger.info(f"Test handler returning: {content}")
         return ElicitResult(action="accept", content=content)
     else:
         # No schema, return simple response
-        content = {"response": "test-response-no-schema"}
+        content: ElicitationContent = {"response": "test-response-no-schema"}
         logger.info(f"Test handler returning: {content}")
         return ElicitResult(action="accept", content=content)
 
@@ -79,7 +79,7 @@ async def custom_test_elicitation_handler(
 async def test_custom_elicitation_handler(fast_agent):
     """Test that custom elicitation handler works (highest precedence)."""
     fast = fast_agent
-    
+
     @fast.agent(
         "custom-handler-agent",
         servers=["resource_forms"],
@@ -87,30 +87,37 @@ async def test_custom_elicitation_handler(fast_agent):
     )
     async def agent_function():
         async with fast.run() as agent:
+            app = agent["custom-handler-agent"]
             # First check that elicitation capability is advertised
-            capabilities_result = await agent.get_resource("elicitation://client-capabilities")
+            capabilities_result = await app.call_tool("client_capabilities", {})
             capabilities_text = str(capabilities_result)
-            
+
             # Should have elicitation capability
-            assert "✓ Elicitation" in capabilities_text, f"Elicitation capability not advertised: {capabilities_text}"
-            
+            assert "✓ Elicitation" in capabilities_text, (
+                f"Elicitation capability not advertised: {capabilities_text}"
+            )
+
             # Now test the actual elicitation with our custom handler
-            result = await agent.get_resource("elicitation://user-profile")
+            result = await app.call_tool("user_profile", {})
             result_str = str(result)
-            
+
             # Verify we got expected test data from our custom handler
             assert "Test User" in result_str, f"Custom handler not used, got: {result_str}"
             assert "test@example.com" in result_str, f"Custom handler not used, got: {result_str}"
-    
+
+            status = (await app.get_server_status())["resource_forms"]
+            assert status.protocol_mode == "modern"
+            assert status.protocol_era == "modern"
+
     await agent_function()
 
 
-@pytest.mark.integration  
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_forms_mode_capability_advertisement(fast_agent):
     """Test that forms mode advertises elicitation capability when no custom handler provided."""
     fast = fast_agent
-    
+
     @fast.agent(
         "forms-agent",
         servers=["resource_forms"],
@@ -118,34 +125,38 @@ async def test_forms_mode_capability_advertisement(fast_agent):
     )
     async def agent_function():
         async with fast.run() as agent:
+            app = agent["forms-agent"]
             # Check capabilities - should have elicitation capability
-            capabilities_result = await agent.get_resource("elicitation://client-capabilities")
+            capabilities_result = await app.call_tool("client_capabilities", {})
             capabilities_text = str(capabilities_result)
-            
+
             # Should advertise elicitation capability in forms mode
-            assert "✓ Elicitation" in capabilities_text, f"Forms mode should advertise elicitation: {capabilities_text}"
-    
+            assert "✓ Elicitation" in capabilities_text, (
+                f"Forms mode should advertise elicitation: {capabilities_text}"
+            )
+
     await agent_function()
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio  
+@pytest.mark.asyncio
 async def test_elicitation_precedence_decorator_over_config(fast_agent):
     """Test that decorator-provided handler takes precedence over config."""
     fast = fast_agent
-    
+
     @fast.agent(
-        "precedence-test-agent", 
+        "precedence-test-agent",
         servers=["resource_forms"],
         elicitation_handler=custom_test_elicitation_handler,  # Should override config
     )
     async def agent_function():
         async with fast.run() as agent:
+            app = agent["precedence-test-agent"]
             # Test actual elicitation behavior
-            result = await agent.get_resource("elicitation://user-profile")
+            result = await app.call_tool("user_profile", {})
             result_str = str(result)
-            
+
             # Should get test data from our custom handler, not config behavior
             assert "Test User" in result_str, f"Decorator precedence failed: {result_str}"
-    
+
     await agent_function()

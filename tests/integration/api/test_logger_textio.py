@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from mcp_agent.mcp.logger_textio import LoggerTextIO, get_stderr_handler
+from fast_agent.mcp.logger_textio import LoggerTextIO, get_stderr_handler
 
 
 @pytest.fixture
@@ -27,11 +27,6 @@ def logger_io():
 
     # Ensure proper cleanup
     logger_io.close()
-    if hasattr(logger_io, "_devnull_fd"):
-        try:
-            os.close(logger_io._devnull_fd)
-        except OSError:
-            pass
 
 
 @pytest.mark.integration
@@ -75,6 +70,7 @@ def test_logger_textio_real_process(test_script_path, logger_io):
     )
 
     # Read and process stderr lines
+    assert process.stderr is not None
     for line in process.stderr:
         logger_io.write(line)
 

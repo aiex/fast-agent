@@ -1,0 +1,366 @@
+from __future__ import annotations
+
+import base64
+from importlib.metadata import version
+from typing import TYPE_CHECKING, Any
+
+from openai import AsyncOpenAI, AuthenticationError, DefaultAioHttpClient
+
+from fast_agent.core.exceptions import ModelConfigError, ProviderKeyError
+from fast_agent.core.logging.logger import get_logger
+from fast_agent.llm.provider.openai.codex_oauth import parse_chatgpt_account_id
+from fast_agent.llm.provider.openai.responses import ResponsesLLM
+from fast_agent.llm.provider.openai.responses_websocket import (
+    ManagedWebSocketConnection,
+    ResponsesWebSocketError,
+    ResponsesWsRequestPlanner,
+    StatefulContinuationResponsesWsPlanner,
+    header_value,
+    merge_headers_case_insensitive,
+)
+from fast_agent.llm.provider_types import Provider
+from fast_agent.mcp.mime_utils import guess_mime_type
+
+if TYPE_CHECKING:
+    from mcp import Tool
+
+    from fast_agent.llm.request_params import RequestParams
+    from fast_agent.tools.web_search import SearchResponse
+
+CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+CODEX_RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite"
+CODEX_RESPONSES_LITE_WS_METADATA_KEY = "ws_request_header_x_openai_internal_codex_responses_lite"
+CODEX_ROUTING_HINT_HEADER = "x-codex-routing-hint"
+CODEX_PROTOCOL_VERSION = "0.153.0"
+
+
+class CodexResponsesLLM(ResponsesLLM):
+    """LLM implementation for Codex responses via ChatGPT OAuth tokens."""
+
+    config_section: str | None = "codexresponses"
+
+    def _replays_native_compaction(self) -> bool:
+        return True
+
+    def __init__(self, provider: Provider = Provider.CODEX_RESPONSES, **kwargs: Any) -> None:
+        kwargs.pop("provider", None)
+        # Responses Lite is opt-in (`?lite=on`); the standard contract keeps hosted
+        # tools and parallel tool calls.
+        self._responses_lite: bool = kwargs.pop("lite", False)
+        super().__init__(provider=provider, **kwargs)
+        self.logger = get_logger(f"{__name__}.{self.name}" if self.name else __name__)
+        self._validate_codex_max_tokens(self.default_request_params)
+
+    def _initialize_default_params(self, kwargs: dict[str, Any]) -> RequestParams:
+        params = super()._initialize_default_params(kwargs)
+        params.max_tokens = None
+        return params
+
+    @staticmethod
+    def _validate_codex_max_tokens(request_params: RequestParams) -> None:
+        if request_params.max_tokens is not None:
+            raise ModelConfigError(
+                "Provider 'codexresponses' does not support max_tokens: "
+                "the Codex Responses endpoint does not accept max_output_tokens."
+            )
+        metadata = request_params.metadata or {}
+        unsupported_metadata = (
+            "max_tokens",
+            "maxTokens",
+            "max_output_tokens",
+            "maxOutputTokens",
+        )
+        if any(metadata.get(key) is not None for key in unsupported_metadata):
+            raise ModelConfigError(
+                "Provider 'codexresponses' does not support max token limits in request metadata."
+            )
+
+    def _uses_codex_responses_lite(self, model_name: str | None) -> bool:
+        return self._responses_lite and self._supports_codex_responses_lite(model_name)
+
+    def standalone_web_search_enabled(self, model: str | None = None) -> bool:
+        return self.web_search_enabled and self._uses_codex_responses_lite(
+            model or self.default_request_params.model
+        )
+
+    def _append_web_search_tool(self, base_args: dict[str, Any]) -> None:
+        if not self._uses_codex_responses_lite(base_args["model"]):
+            super()._append_web_search_tool(base_args)
+
+    async def run_standalone_web_search(
+        self, session_id: str, arguments: dict[str, Any], *, model: str | None = None
+    ) -> "SearchResponse":
+        from fast_agent.llm.provider.openai.codex_oauth import get_codex_access_token
+        from fast_agent.llm.provider.openai.web_tools import resolve_web_search
+        from fast_agent.tools.web_search import (
+            SearchCommands,
+            SearchRequest,
+            SearchSettings,
+            WebSearchClient,
+            WebSearchError,
+        )
+
+        model = model or self.default_request_params.model
+        if not self.standalone_web_search_enabled(model):
+            raise ValueError("Standalone web search is not enabled for this model")
+        commands = SearchCommands.model_validate(arguments)
+        resolved = resolve_web_search(
+            self._openai_settings(), web_search_override=self._web_search_override
+        )
+        settings = resolved.settings
+        settings_payload = {
+            "search_context_size": settings.search_context_size,
+            "external_web_access": settings.external_web_access,
+            "filters": {"allowed_domains": settings.allowed_domains}
+            if settings.allowed_domains is not None
+            else None,
+            "user_location": settings.user_location.model_dump(exclude_none=True)
+            if settings.user_location is not None
+            else None,
+        }
+        request = SearchRequest(
+            id=session_id,
+            model=model or "",
+            commands=commands,
+            settings=SearchSettings.model_validate(settings_payload),
+        )
+        headers = self._build_websocket_headers()
+        for attempt in range(2):
+            try:
+                async with WebSearchClient(
+                    base_url=self._base_url() or CODEX_BASE_URL,
+                    headers=headers,
+                ) as client:
+                    return await client.search(request)
+            except WebSearchError as exc:
+                if exc.status_code != 401 or attempt:
+                    raise
+                token = get_codex_access_token(force_refresh=True)
+                account_id = parse_chatgpt_account_id(token) if token else None
+                if not token or not account_id:
+                    raise ProviderKeyError(
+                        "Codex web search authentication failed",
+                        "Run `fast-agent auth provider login codex` to reauthenticate.",
+                    ) from None
+                headers = merge_headers_case_insensitive(
+                    headers,
+                    {"Authorization": f"Bearer {token}", "chatgpt-account-id": account_id},
+                )
+        raise RuntimeError("Unreachable search retry state")
+
+    def _display_model(self, model: str | None) -> str | None:
+        if not model:
+            return model
+        return f"∞{model}"
+
+    def _log_chat_progress(self, chat_turn: int | None = None, model: str | None = None) -> None:
+        super()._log_chat_progress(chat_turn=chat_turn, model=self._display_model(model))
+
+    def _log_chat_finished(self, model: str | None = None) -> None:
+        super()._log_chat_finished(model=self._display_model(model))
+
+    def _update_streaming_progress(self, content: str, model: str, estimated_tokens: int) -> int:
+        display_model = self._display_model(model) or model
+        return super()._update_streaming_progress(content, display_model, estimated_tokens)
+
+    def _provider_base_url(self) -> str | None:
+        settings = self._get_provider_config()
+        if settings and getattr(settings, "base_url", None):
+            return settings.base_url
+        return CODEX_BASE_URL
+
+    def _responses_client(self) -> AsyncOpenAI:
+        try:
+            token = self._api_key()
+            account_id = parse_chatgpt_account_id(token)
+            if not account_id:
+                raise ProviderKeyError(
+                    "Codex OAuth token invalid",
+                    "The Codex access token did not contain a chatgpt_account_id. "
+                    "Run `fast-agent auth provider login codex` to refresh your token.",
+                )
+            default_headers = dict(self._default_headers() or {})
+            default_headers["chatgpt-account-id"] = account_id
+            default_headers.setdefault("originator", "codex_cli_rs")
+            try:
+                app_version = version("fast-agent-mcp")
+            except Exception:
+                app_version = "unknown"
+            default_headers.setdefault(
+                "User-Agent",
+                f"codex_cli_rs/{CODEX_PROTOCOL_VERSION} fast-agent/{app_version}",
+            )
+            return AsyncOpenAI(
+                api_key=token,
+                base_url=self._base_url(),
+                http_client=DefaultAioHttpClient(),
+                default_headers=default_headers,
+            )
+        except AuthenticationError as e:
+            raise ProviderKeyError(
+                "Invalid Codex OAuth token",
+                "The configured Codex OAuth token was rejected. "
+                "Run `fast-agent auth provider login codex` to reauthenticate.",
+            ) from e
+
+    def _supports_websocket_transport(self) -> bool:
+        return True
+
+    def _new_ws_request_planner(self) -> ResponsesWsRequestPlanner:
+        """Use response-id continuation on websocket turns."""
+        return StatefulContinuationResponsesWsPlanner()
+
+    def _prepare_websocket_arguments(self, arguments: dict[str, Any]) -> None:
+        model = arguments.get("model")
+        if not isinstance(model, str) or not self._uses_codex_responses_lite(model):
+            return
+        client_metadata = arguments.setdefault("client_metadata", {})
+        if isinstance(client_metadata, dict):
+            client_metadata[CODEX_RESPONSES_LITE_WS_METADATA_KEY] = "true"
+
+    async def _normalize_input_file_part(
+        self,
+        client: AsyncOpenAI,
+        part: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        del client
+        if part.get("file_id"):
+            return part, False
+
+        filename = part.get("filename")
+        file_data = part.get("file_data")
+        if isinstance(file_data, str):
+            if file_data.startswith("data:"):
+                return part, False
+            mime_type = guess_mime_type(filename) if isinstance(filename, str) else None
+            inline_part = dict(part)
+            inline_part["file_data"] = (
+                f"data:{mime_type or 'application/octet-stream'};base64,{file_data}"
+            )
+            return inline_part, True
+
+        file_url = part.get("file_url")
+        if not isinstance(file_url, str):
+            return part, False
+
+        data_bytes, resolved_filename, mime_type = self._file_bytes_from_url(file_url, filename)
+        if data_bytes is None:
+            return part, False
+
+        encoded_data = base64.b64encode(data_bytes).decode("ascii")
+        inline_part: dict[str, Any] = {
+            "type": "input_file",
+            "file_data": f"data:{mime_type or 'application/octet-stream'};base64,{encoded_data}",
+        }
+        if resolved_filename:
+            inline_part["filename"] = resolved_filename
+        return inline_part, True
+
+    def _build_websocket_headers(self) -> dict[str, str]:
+        token = self._api_key()
+        account_id = parse_chatgpt_account_id(token)
+        if not account_id:
+            raise ProviderKeyError(
+                "Codex OAuth token invalid",
+                "The Codex access token did not contain a chatgpt_account_id. "
+                "Run `fast-agent auth provider login codex` to refresh your token.",
+            )
+        default_headers = dict(self._default_headers() or {})
+        default_headers["chatgpt-account-id"] = account_id
+        default_headers.setdefault("originator", "codex_cli_rs")
+        try:
+            app_version = version("fast-agent-mcp")
+        except Exception:
+            app_version = "unknown"
+        default_headers.setdefault(
+            "User-Agent",
+            f"codex_cli_rs/{CODEX_PROTOCOL_VERSION} fast-agent/{app_version}",
+        )
+        return merge_headers_case_insensitive(
+            default_headers,
+            super()._build_websocket_headers(),
+        )
+
+    async def _create_websocket_connection(
+        self,
+        url: str,
+        headers: dict[str, str],
+        timeout_seconds: float | None,
+    ) -> ManagedWebSocketConnection:
+        try:
+            return await super()._create_websocket_connection(url, headers, timeout_seconds)
+        except ResponsesWebSocketError as exc:
+            if exc.status != 401:
+                raise
+        # 401: attempt silent token refresh then retry once.
+        self.logger.warning(
+            "Codex WebSocket rejected with 401; attempting token refresh",
+            data={"url": url},
+        )
+        from fast_agent.llm.provider.openai.codex_oauth import get_codex_access_token
+
+        try:
+            token = get_codex_access_token(force_refresh=True)
+        except ProviderKeyError as refresh_err:
+            raise ProviderKeyError(
+                "Codex OAuth token rejected (401) and refresh failed",
+                "The Codex OAuth token is invalid and could not be refreshed automatically. "
+                "Run `fast-agent auth provider login codex` to reauthenticate.",
+            ) from refresh_err
+        if token is None:
+            raise ProviderKeyError(
+                "Codex OAuth token rejected (401)",
+                "Run `fast-agent auth provider login codex` to reauthenticate.",
+            )
+        fresh_base_headers = self._build_websocket_headers()
+        fresh_auth_headers = {
+            name: value
+            for name in ("Authorization", "chatgpt-account-id")
+            if (value := header_value(fresh_base_headers, name)) is not None
+        }
+        fresh_headers = merge_headers_case_insensitive(headers, fresh_auth_headers)
+        return await super()._create_websocket_connection(url, fresh_headers, timeout_seconds)
+
+    def _build_response_args(
+        self,
+        input_items: list[dict[str, Any]],
+        request_params: RequestParams,
+        tools: list[Tool] | None,
+    ) -> dict[str, Any]:
+        self._validate_codex_max_tokens(request_params)
+        args = super()._build_response_args(input_items, request_params, tools)
+        model = args["model"]
+        routing_hint = f"model={model}"
+        if args.get("service_tier") == "priority":
+            routing_hint = f"{routing_hint};tier=priority"
+        generated_headers = {CODEX_ROUTING_HINT_HEADER: routing_hint}
+        if self._uses_codex_responses_lite(model):
+            generated_headers[CODEX_RESPONSES_LITE_HEADER] = "true"
+            lite_input: list[dict[str, Any]] = [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": args.pop("tools", []),
+                }
+            ]
+            if instructions := args.pop("instructions", None):
+                lite_input.append(
+                    {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [{"type": "input_text", "text": instructions}],
+                    }
+                )
+            lite_input.extend(args["input"])
+            args["input"] = lite_input
+            args["parallel_tool_calls"] = False
+            reasoning = args.get("reasoning")
+            if isinstance(reasoning, dict):
+                reasoning["context"] = "all_turns"
+        existing_headers = args.get("extra_headers")
+        args["extra_headers"] = merge_headers_case_insensitive(
+            existing_headers if isinstance(existing_headers, dict) else None,
+            generated_headers,
+        )
+        args["tool_choice"] = request_params.sampling_tool_choice or "auto"
+        return args

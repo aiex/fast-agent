@@ -5,13 +5,22 @@ Simple MCP server that responds to tool calls with text and image content.
 
 import logging
 
-from mcp.server.fastmcp import Context, FastMCP
+from fastmcp import Context, FastMCP
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Create the FastMCP server
 app = FastMCP(name="An MCP Server", instructions="Here is how to use this server")
+
+
+@app.prompt(
+    name="check_weather_prompt",
+    description="Asks for the weather in a specified location.",
+)
+def check_weather_prompt(location: str) -> str:
+    """The location to check"""
+    return f"Check the weather in {location}"
 
 
 @app.tool(
@@ -36,9 +45,9 @@ def shirt_colour() -> str:
 @app.tool(name="implementation", description="Returns the Client implementation")
 def implementation(ctx: Context) -> str:
     assert ctx.session.client_params is not None, "Client params should not be None"
-    clientInfo = ctx.session.client_params.clientInfo or None
-
-    return clientInfo.model_dump_json()
+    client_info = ctx.session.client_params.client_info
+    assert client_info is not None
+    return client_info.model_dump_json()
 
 
 if __name__ == "__main__":

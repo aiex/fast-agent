@@ -1,0 +1,210 @@
+"""
+Global constants for fast_agent with minimal dependencies to avoid circular imports.
+"""
+
+from dataclasses import dataclass
+
+# Canonical tool name for the human input/elicitation tool
+HUMAN_INPUT_TOOL_NAME = "__human_input"
+REASONING = "reasoning"
+REASONING_LABEL = "Reasoning"
+"""UI label for reasoning effort configuration."""
+ANTHROPIC_THINKING_BLOCKS = "anthropic-thinking-raw"
+"""Raw Anthropic thinking blocks with signatures for tool use passback."""
+ANTHROPIC_ASSISTANT_RAW_CONTENT = "anthropic-assistant-raw-content"
+"""Raw Anthropic assistant content blocks in provider order for exact history replay."""
+ANTHROPIC_SERVER_TOOLS_CHANNEL = "anthropic-server-tools"
+"""Raw Anthropic server-tool blocks (server_tool_use + *_tool_result) for history passback."""
+ANTHROPIC_CITATIONS_CHANNEL = "anthropic-citations"
+"""Extracted citation metadata from Anthropic text blocks for source rendering."""
+ANTHROPIC_CONTAINER_CHANNEL = "anthropic-container"
+"""Anthropic code-execution container metadata for multi-turn request reuse."""
+OPENAI_REASONING_ENCRYPTED = "openai-reasoning-encrypted"
+"""Encrypted OpenAI reasoning items for stateless Responses API passback."""
+OPENAI_COMPACTION_ITEMS = "openai-compaction-items"
+"""Opaque OpenAI Responses compaction items carried by a provider-native checkpoint."""
+OPENAI_COMPACTION_TRIGGER = "openai-compaction-trigger"
+"""Request-only marker for a final ``compaction_trigger`` item; never persist to history."""
+OPENAI_ASSISTANT_MESSAGE_ITEMS = "openai-assistant-message-items"
+"""Raw OpenAI assistant message items for Responses history passback, including phase."""
+OPENAI_MCP_LIST_TOOLS_ITEMS = "openai-mcp-list-tools-items"
+"""Raw OpenAI mcp_list_tools output items for Responses history passback."""
+FAST_AGENT_ERROR_CHANNEL = "fast-agent-error"
+FAST_AGENT_ALERT_CHANNEL = "fast-agent-alert"
+FAST_AGENT_SAFETY_DETAILS = "fast-agent-safety-details"
+"""Normalized provider safety/refusal metadata for display and diagnostics."""
+FAST_AGENT_REMOVED_METADATA_CHANNEL = "fast-agent-removed-meta"
+FAST_AGENT_URL_ELICITATION_CHANNEL = "fast-agent-url-elicitation"
+FAST_AGENT_TIMING = "fast-agent-timing"
+FAST_AGENT_TOOL_METADATA = "fast-agent-tool-metadata"
+FAST_AGENT_TOOL_TIMING = "fast-agent-tool-timing"
+BUILTIN_SUBAGENT_TOOL_NAME = "subagent"
+"""Reserved name of the built-in one-shot subagent tool."""
+FAST_AGENT_SUBAGENT_RESULT_METADATA = "fast-agent-subagent"
+"""Tool-result ``_meta`` key for built-in subagent execution details."""
+FAST_AGENT_PTC_VALUE = "fast-agent-ptc-value"
+"""Tool-result ``_meta`` key for the value sandbox code receives instead of the model text."""
+FAST_AGENT_PTC_ERROR = "fast-agent-ptc-error"
+"""Tool-result ``_meta`` key for the short message sandbox code sees when an error result raises."""
+FAST_AGENT_PTC_CALLS = "fast-agent-ptc-calls"
+"""``execute_python`` result ``_meta`` key recording the nested tool calls the script made."""
+FAST_AGENT_SHELL_PROCESS_METADATA = "fast-agent-shell-process-metadata"
+FAST_AGENT_PROCESS_POLL_FOLD = "fast-agent-process-poll-fold"
+FAST_AGENT_USAGE = "fast-agent-usage"
+FAST_AGENT_RETRY = "fast-agent-retry"
+FAST_AGENT_PROVIDER_ERROR = "fast-agent-provider-error"
+"""Why a model call failed, as codes (`fast-agent.provider-error/v1`): exported to ATIF."""
+FAST_AGENT_SYNTHETIC_FINAL_CHANNEL = "fast-agent-synthetic-final"
+FAST_AGENT_PENDING_MEDIA_ATTACHMENTS = "fast-agent-pending-media-attachments"
+"""Content blocks staged by attach_media for injection as user input on the next LLM call."""
+# Persisted provenance for user-role media staged from tool results, not a new turn.
+FAST_AGENT_TOOL_MEDIA_MESSAGE = "fast-agent-tool-media-message"
+FAST_AGENT_COMPACTION_CHANNEL = "fast-agent-compaction"
+# Marks a model response that carries a provider compaction checkpoint in-band
+# (e.g. an Anthropic compaction block or an OpenAI compaction item). History
+# rewrites such as process-poll folding must keep these messages: the provider
+# reads the checkpoint to know where compacted context starts.
+FAST_AGENT_PROVIDER_CHECKPOINT = "fast-agent-provider-checkpoint"
+"""Metadata channel marking a compaction summary message (prompt used, counts, timestamps)."""
+
+FORCE_SEQUENTIAL_TOOL_CALLS = False
+"""Force tool execution to run sequentially even when multiple tool calls are present."""
+
+
+def should_parallelize_tool_calls(tool_call_count: int) -> bool:
+    """Return True when tool calls should run in parallel (and show per-call IDs)."""
+    return (not FORCE_SEQUENTIAL_TOOL_CALLS) and tool_call_count > 1
+
+
+# should we have MAX_TOOL_CALLS instead to constrain by number of tools rather than turns...?
+DEFAULT_MAX_ITERATIONS = 9999
+"""Maximum number of User/Assistant turns to take"""
+
+DEFAULT_STREAMING_TIMEOUT = 150.0
+"""Default idle timeout in seconds between provider streaming events."""
+
+DEFAULT_HIGH_REASONING_STREAMING_TIMEOUT = 300.0
+"""Default stream idle timeout for high, xhigh, and max reasoning effort."""
+
+MIN_PROCESS_POLL_WAIT_SECONDS = 10
+"""Minimum positive managed-process wait exposed to models."""
+
+MAX_PROCESS_POLL_WAIT_SECONDS = 3600
+"""Maximum configurable managed-process wait in seconds."""
+
+BACKGROUND_LAUNCH_SETTLE_SECONDS = 1.5
+"""How long a background launch watches for an immediate exit before reporting "running".
+
+A service that crashes on startup (bad path, port in use, missing binary) is then
+reported with its exit code and output instead of appearing to be running.
+"""
+
+DEFAULT_PROCESS_POLL_MAX_WAIT_SECONDS = 260
+"""Default ceiling for one model-initiated managed-process wait.
+
+Each wait returns while provider prompt caches are still warm (tested with a safe
+buffer at about 260 seconds), so a hung or long process costs a cached poll
+rather than blocking the model for up to an hour. Longer work is followed with
+repeated waits, which fold in history when quiet.
+"""
+
+MAX_PROCESS_OUTPUT_QUERY_CHARS = 512
+"""Maximum literal query length for retained process output."""
+
+MAX_RETAINED_DURABLE_PROCESS_RECORDS = 100
+"""Maximum completed durable process records retained under fast-agent home."""
+
+MAX_FOREGROUND_AUTO_AWAIT_SECONDS = 3600
+"""Maximum configurable total runtime for foreground auto-await."""
+
+DEFAULT_TERMINAL_OUTPUT_BYTE_LIMIT = 16_000
+"""Baseline byte limit for ACP terminal output when no model info exists."""
+
+DEFAULT_DURABLE_PROCESS_OUTPUT_RETENTION_BYTES = 2 * 1024 * 1024
+"""Maximum bytes retained in each durable process output log by default."""
+
+TERMINAL_OUTPUT_TOKEN_RATIO = 0.83
+"""Target fraction of model max output tokens to budget for terminal output (~2/3 after headroom)."""
+
+TERMINAL_OUTPUT_TOKEN_HEADROOM_RATIO = 0.2
+"""Leave headroom for tool wrapper text and other turn data."""
+
+# Empirical observation from real shell outputs (135 samples, avg 3.33 bytes/token)
+TERMINAL_BYTES_PER_TOKEN = 3.3
+"""Bytes-per-token estimate for terminal output limits and display."""
+
+MAX_TERMINAL_OUTPUT_TOKEN_LIMIT = 10_000
+"""Hard cap on default ACP terminal output tokens."""
+
+MAX_TERMINAL_OUTPUT_BYTE_LIMIT = int(MAX_TERMINAL_OUTPUT_TOKEN_LIMIT * TERMINAL_BYTES_PER_TOKEN)
+"""Hard cap on default ACP terminal output (~10k tokens with TERMINAL_BYTES_PER_TOKEN=3.3)."""
+
+MAX_MANAGED_SHELL_PROCESSES = 32
+"""Maximum number of retained managed shell process records per runtime."""
+
+DEFAULT_AGENT_INSTRUCTION = """You are a helpful AI Agent.
+
+{{serverInstructions}}
+{{agentSkills}}
+{{file_silent:AGENTS.md}}
+{{env}}
+
+Mermaid diagrams between code fences are supported.
+
+{{model_specific}}
+
+The current date is {{currentDate}}."""
+
+
+DEFAULT_HOME_DIR = ".fast-agent"
+
+DEFAULT_SKILLS_PATHS = [
+    f"{DEFAULT_HOME_DIR}/skills",
+    ".agents/skills",
+    ".claude/skills",
+]
+
+CONTROL_MESSAGE_SAVE_HISTORY = "***SAVE_HISTORY"
+
+FAST_AGENT_SHELL_CHILD_ENV = "FAST_AGENT_SHELL_CHILD"
+"""Environment variable set when running fast-agent shell commands."""
+
+FAST_AGENT_RUNTIME_HOME = "FAST_AGENT_RUNTIME_HOME"
+"""Resolved active fast-agent home exported to shell commands and automation."""
+
+FAST_AGENT_AUTH_FILE = "FAST_AGENT_AUTH_FILE"
+"""Explicit portable provider credential file."""
+
+
+@dataclass(frozen=True)
+class DocumentedEnvVar:
+    """Environment variable that is part of a documented fast-agent surface."""
+
+    symbol: str
+    value: str
+    purpose: str
+    surface: str
+
+
+DOCUMENTED_ENV_VARS = (
+    DocumentedEnvVar(
+        symbol="FAST_AGENT_SHELL_CHILD_ENV",
+        value=FAST_AGENT_SHELL_CHILD_ENV,
+        purpose="Set to `1` in child shells opened from the TUI with `!`.",
+        surface="tui",
+    ),
+    DocumentedEnvVar(
+        symbol="FAST_AGENT_AUTH_FILE",
+        value=FAST_AGENT_AUTH_FILE,
+        purpose="Explicit portable provider OAuth credential file.",
+        surface="auth",
+    ),
+    DocumentedEnvVar(
+        symbol="FAST_AGENT_RUNTIME_HOME",
+        value=FAST_AGENT_RUNTIME_HOME,
+        purpose="Resolved active fast-agent home exported to shell commands and automation.",
+        surface="runtime",
+    ),
+)
+
+SHELL_NOTICE_PREFIX = "[yellow][bold]Agents have shell[/bold][/yellow]"
